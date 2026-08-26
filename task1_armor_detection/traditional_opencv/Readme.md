@@ -1,4 +1,4 @@
-# project1
+# traditional_opencv · 传统 OpenCV 装甲板检测
 
 ## 介绍
 
@@ -14,7 +14,7 @@
 ## 目录结构
 
 ```
-project1/
+traditional_opencv/
 ├── armor_detector/
 │   ├── CMakeLists.txt
 │   ├── include/armor_detector/
@@ -25,13 +25,11 @@ project1/
 │       └── detector.cpp       # 检测实现（灯条筛选/配对/去重）
 ├── config/
 │   └── detector_params.txt    # 全部可调参数（key=value）
-├── video_input/               # 测试视频（不入 git）
-│   ├── blu.avi
-│   ├── red.avi
-│   └── 装甲板.avi
 ├── video_output/              # 预留输出目录
 ├── auto_aim_interfaces/       # ROS2 消息定义（预留）
 └── Readme.md
+
+> 测试视频统一放在 task1 共享目录 `../video_input/`（blu.avi / red.avi / 装甲板.avi，不入 git）
 ```
 
 ## 编译

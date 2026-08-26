@@ -56,15 +56,15 @@ g++ -o rp_detect main.cpp OpenvinoInfer.cpp \
 
 | 参数 | 说明 | 默认值 |
 | --- | --- | --- |
-| 输入视频路径 | 必填，待检测的视频文件 | — |
+| 输入视频路径 | 必填，待检测的视频文件（测试视频统一在 task1 共享目录 `../video_input/`） | — |
 | detect_color | 检测颜色：`0`=保留红(滤蓝)，`1`=保留蓝(滤红) | `0` |
 | 输出视频路径 | 标注结果写入该 AVI 文件 | `<输入名>_rp_out.avi` |
 
 示例：
 
 ```bash
-# 检测红色（red.avi 为红色装甲板测试视频）
-./rp_detect video_input/red.avi 0 video_output/red_out.avi
+# 检测红色（red.avi 为红色装甲板测试视频，位于上一级共享 ../video_input/）
+./rp_detect ../video_input/red.avi 0 video_output/red_out.avi
 # 检测蓝色（blu.avi 为蓝色装甲板测试视频）
-./rp_detect video_input/blu.avi 1
+./rp_detect ../video_input/blu.avi 1
 ```
