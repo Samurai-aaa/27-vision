@@ -1,0 +1,23 @@
+# ===== 编译产物 =====
+# CMake 构建目录（源码在 armor_detector/，build/ 每次编译重建）
+armor_detector/build/
+
+# ===== 视频素材（不提交，文件大）=====
+# level3 根 .gitignore 已全局忽略，这里兜底，project1 独立成仓库时也生效
+*.avi
+*.mp4
+*.mkv
+*.mov
+*.flv
+video/
+video_input/
+video_output/
+
+# ===== 编辑器 / 系统 =====
+.vscode/
+*~
+*.swp
+
+# ===== 临时图片（调试截图等）=====
+*.jpg
+*.png

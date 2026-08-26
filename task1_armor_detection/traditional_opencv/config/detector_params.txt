@@ -1,0 +1,36 @@
+# 装甲板检测参数配置
+
+# ---------- 视频路径 ----------
+video_path = "video_input/装甲板.avi"
+
+# ---------- 检测目标颜色 ----------
+# 0=红(敌人红方)  1=蓝(敌人蓝方)  2=红蓝都检测
+detect_color=2
+
+# ---------- 预处理 ----------
+# 灰度二值化阈值（0~255）。越小越容易把暗色误判为灯条，越大越容易漏检。
+binary_thres=120
+
+# ---------- 灯条筛选（LightParams） ----------
+# 灯条短边/长边比例范围，细长灯条应远小于 1。
+light_min_ratio=0.1
+light_max_ratio=0.4
+# 灯条与垂直方向的最大夹角（度），竖直的灯条该角接近 0。
+light_max_angle=40.0
+
+# ---------- 装甲板配对（ArmorParams） ----------
+
+# 两根灯条长度比（短/长）下限，越接近 1 越像一对。
+armor_min_light_ratio=0.7
+
+# 中心距（以平均灯长为单位）区间：小装甲板与大装甲板各一个区间。
+armor_min_small_center_distance=0.5
+armor_max_small_center_distance=2.5
+armor_min_large_center_distance=2.5
+armor_max_large_center_distance=3.5
+
+# 两根灯条中心连线与水平方向的最大夹角（度）。
+armor_max_angle=10.0
+
+# 角度判据只看"高度差/横向距离"的比例，这条补一个绝对高度约束；卡太死会让倾斜视角漏检
+armor_max_center_height_diff=0.5
