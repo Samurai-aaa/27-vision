@@ -26,7 +26,6 @@ traditional_opencv/
 ├── config/
 │   └── detector_params.txt    # 全部可调参数（key=value）
 ├── video_output/              # 预留输出目录
-├── auto_aim_interfaces/       # ROS2 消息定义（预留）
 └── Readme.md
 
 > 测试视频统一放在 task1 共享目录 `../video_input/`（blu.avi / red.avi / 装甲板.avi，不入 git）
@@ -47,17 +46,22 @@ cmake --build armor_detector/build
 
 所有参数默认从 `config/detector_params.txt` 读取，命令行参数可覆盖。**视频路径默认取配置里的 `video_path`**。
 
+程序会把**标注后的画面保存为 AVI 视频**，输出路径优先级：命令行第 3 个参数 > 配置里的 `video_output` > 自动在输入视频名后加 `_out.avi`。
+
 ```bash
-# 1. 直接运行（视频/颜色/阈值等全部用 config 里的值）
+# 1. 直接运行（视频/颜色/阈值等全部用 config 里的值，输出到 config 的 video_output）
 ./armor_detector/build/armor_detector
 
-# 2. 指定视频（覆盖配置里的 video_path）
+# 2. 指定视频（覆盖配置里的 video_path，输出自动为 video_input/xxx_out.avi）
 ./armor_detector/build/armor_detector video_input/red.avi
 ./armor_detector/build/armor_detector video_input/blu.avi
 ./armor_detector/build/armor_detector video_input/装甲板.avi
 
 # 3. 指定视频 + 指定配置文件
 ./armor_detector/build/armor_detector video_input/red.avi config/detector_params.txt
+
+# 4. 指定视频 + 配置文件 + 输出路径（任意位置，需先确保目录存在）
+./armor_detector/build/armor_detector video_input/red.avi config/detector_params.txt video_output/red_out.avi
 ```
 
 窗口打开后按 **q** 退出。
@@ -96,3 +100,4 @@ frame 4: lights=2 armors=1 [SMALL conf=0.78]
 | `armor_min_large_center_distance` / `armor_max_large_center_distance` | `2.5` / `3.5` | 大装甲板中心距区间 |
 | `armor_max_angle` | `10.0` | 两灯条中心连线与水平方向最大夹角（度） |
 | `armor_max_center_height_diff` | `0.5` | 两灯条中心高度差上限（以平均灯长为单位），太大直接取消配对 |
+| `video_output` | 空（自动加 `_out.avi`） | 标注视频输出路径（相对运行时目录），空则自动生成，命令行第 3 个参数可覆盖 |

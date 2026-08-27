@@ -6,7 +6,7 @@
 #include <algorithm>
 #include <string>
 
-namespace project1 {
+namespace task1 {
 
 enum class Color{
     RED = 0,
@@ -66,6 +66,6 @@ struct Armor {
     std::string classification_result;
 };
 
-}  // namespace project1
+}  // namespace task1
 
 #endif  // ARMOR_DETECTOR__ARMOR_HPP

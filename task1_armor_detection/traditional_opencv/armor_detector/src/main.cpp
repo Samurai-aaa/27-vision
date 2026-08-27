@@ -1,6 +1,7 @@
-// 装甲板识别主程序（纯 OpenCV）：读视频 -> 检测 -> 绘制 -> 显示（不保存视频）
-// 用法: ./armor_detector [video_path] [config_path] [--debug]
-//   所有参数（含视频路径）默认从 config/detector_params.txt 读取，命令行可覆盖
+// 装甲板识别主程序（纯 OpenCV）：读视频 -> 检测 -> 绘制 -> 显示 -> 保存标注视频
+// 用法: ./armor_detector [video_path] [config_path] [output_path] [--debug]
+//   所有参数（含视频路径、输出路径）默认从 config/detector_params.txt 读取，命令行可覆盖
+//   未指定 output_path 时：优先用配置里的 video_output，否则在输入视频名后自动加 _out.avi
 #include <opencv2/opencv.hpp>
 
 #include <cstdio>
@@ -60,6 +61,7 @@ int main(int argc, char ** argv)
     // 1. 解析命令行：--debug 开关；其余参数依次为 视频路径、配置文件路径
     std::string video_path;
     std::string config_path = "config/detector_params.txt";
+    std::string output_path;
     bool debug = false;
     std::vector<std::string> args;
     for (int i = 1; i < argc; i++) {
@@ -71,19 +73,32 @@ int main(int argc, char ** argv)
     }
     if (args.size() >= 1) video_path = args[0];
     if (args.size() >= 2) config_path = args[1];
+    if (args.size() >= 3) output_path = args[2];
 
     // 2. 加载配置：视频路径（命令行没给时用配置里的）、检测颜色、二值化阈值、灯条/装甲板参数
     auto p = loadParams(config_path);
     if (video_path.empty()) {
         video_path = p.count("video_path") ? p["video_path"] : "../video_input/装甲板.avi";
     }
+
+    // 输出视频路径：命令行第 3 个参数优先；否则用配置里的 video_output；
+    // 两者都为空时在输入视频名后自动加 _out.avi
+    if (output_path.empty()) {
+        output_path = p.count("video_output") ? p["video_output"] : "";
+    }
+    if (output_path.empty()) {
+        auto dot = video_path.find_last_of('.');
+        output_path =
+          dot == std::string::npos ? video_path + "_out.avi" : video_path.substr(0, dot) + "_out.avi";
+    }
+
     const int binary_thres = static_cast<int>(getNum(p, "binary_thres", 160));
 
-    project1::Detector::LightParams light_params{
+    task1::Detector::LightParams light_params{
       getNum(p, "light_min_ratio", 0.1),
       getNum(p, "light_max_ratio", 0.4),
       getNum(p, "light_max_angle", 40.0)};
-    project1::Detector::ArmorParams armor_params{
+    task1::Detector::ArmorParams armor_params{
       getNum(p, "armor_min_light_ratio", 0.7),
       getNum(p, "armor_min_small_center_distance", 0.8),
       getNum(p, "armor_max_small_center_distance", 3.2),
@@ -94,9 +109,9 @@ int main(int argc, char ** argv)
 
     // 检测目标颜色：配置文件里 detect_color=0/1/2 对应 红/蓝/红蓝都检测
     const int color_val = static_cast<int>(getNum(p, "detect_color", 2));
-    project1::Color detect_color =
-      color_val == 0 ? project1::Color::RED : color_val == 1 ? project1::Color::BLUE
-                                                             : project1::Color::NONE;
+    task1::Color detect_color =
+      color_val == 0 ? task1::Color::RED : color_val == 1 ? task1::Color::BLUE
+                                                             : task1::Color::NONE;
 
     // 3. 打开视频
     cv::VideoCapture cap(video_path);
@@ -105,11 +120,24 @@ int main(int argc, char ** argv)
         return -1;
     }
     const double fps = cap.get(cv::CAP_PROP_FPS);   // 视频帧率，用于按原速播放
+    const int frame_w = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_WIDTH));
+    const int frame_h = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_HEIGHT));
 
-    project1::Detector detector(binary_thres, detect_color, light_params, armor_params);
+    // 3.1 输出视频：标注后的画面写入 AVI，路径可命令行/配置指定
+    cv::VideoWriter writer;
+    writer.open(
+      output_path, cv::VideoWriter::fourcc('M', 'J', 'P', 'G'), fps,
+      cv::Size(frame_w, frame_h));
+    if (writer.isOpened()) {
+        std::cout << "[main] 标注视频写入: " << output_path << "\n";
+    } else {
+        std::cerr << "[main] 警告: 无法写入输出视频 " << output_path << "\n";
+    }
+
+    task1::Detector detector(binary_thres, detect_color, light_params, armor_params);
     std::cout << "[main] 视频 " << video_path << " | 二值化阈值 " << binary_thres
               << " | 检测颜色 " << color_val << " (0红 1蓝 2红蓝) | 参数文件 " << config_path
-              << "\n";
+              << " | 输出 " << output_path << "\n";
 
     // 4. 逐帧检测并显示（按 q 退出；--debug 额外显示二值图并打印统计）
     cv::Mat frame;
@@ -123,6 +151,8 @@ int main(int argc, char ** argv)
                    std::to_string(armors.size()),
           cv::Point(10, 25), cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(255, 255, 255), 1);
 
+        if (writer.isOpened()) writer.write(frame);   // 保存标注后的当前帧
+
         if (debug) {
             cv::imshow("binary (debug)", detector.binary_img);
             printf(
@@ -130,7 +160,7 @@ int main(int argc, char ** argv)
               armors.size());
             for (const auto & a : armors) {
                 printf(
-                  " [%s conf=%.2f]", a.type == project1::ArmorType::BIG ? "BIG" : "SMALL",
+                  " [%s conf=%.2f]", a.type == task1::ArmorType::BIG ? "BIG" : "SMALL",
                   a.confidence);
             }
             printf("\n");
@@ -143,6 +173,8 @@ int main(int argc, char ** argv)
     }
 
     std::cout << "[main] 处理完成，共 " << frame_count << " 帧\n";
+    cap.release();
+    writer.release();
     cv::destroyAllWindows();
     return 0;
 }

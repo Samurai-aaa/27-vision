@@ -12,7 +12,7 @@
 
 #include "armor_detector/detector.hpp"
 
-namespace project1{
+namespace task1{
 
 Detector::Detector(
     int bin_thres, Color color, const LightParams& l, const ArmorParams& a)

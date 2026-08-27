@@ -12,7 +12,7 @@
 
 #include "armor_detector/armor.hpp"
 
-namespace project1 {
+namespace task1 {
 
 class Detector{
 public:
@@ -68,6 +68,6 @@ private:
     std::vector<Armor> armors_;
 };
 
-}   // namespace project1
+}   // namespace task1
 
 #endif  // ARMOR_DETECTOR__DETECTOR_HPP
