@@ -21,3 +21,13 @@
 ### Changed 变更
 
 ### Fixed 修复
+
+## [1.0.1] - 2026-08-30
+
+### Feature 新增
+
+- 新增solvePnPGeneric功能，并可通过输入指令选择两种模式
+
+### Changed 变更
+
+### Fixed 修复

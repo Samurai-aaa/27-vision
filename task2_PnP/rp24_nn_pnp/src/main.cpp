@@ -1,6 +1,7 @@
 // 深大 RP24 装甲板检测 · 最小视频验证程序
-// 用法: ./rp_detect <视频路径> [detect_color=0] [输出视频路径]
+// 用法: ./rp_detect <视频路径> [detect_color=0] [输出视频路径] [pnp_method=0]
 //   detect_color: 0=保留红(滤蓝)  1=保留蓝(滤红)
+//   pnp_method: 0=solvePnP 单解(IPPE)  1=solvePnPGeneric 双解选优
 #include "OpenvinoInfer.h"
 #include "solver.hpp"
 
@@ -18,12 +19,14 @@ static const char* LABELS[] = {"G", "1", "2", "3", "4", "5", "O", "Bs", "Bb"};
 
 int main(int argc, char** argv) {
     if (argc < 2) {
-        fprintf(stderr, "用法: %s <视频路径> [detect_color=0] [输出视频路径]\n", argv[0]);
+        fprintf(stderr, "用法: %s <视频路径> [detect_color=0] [输出视频路径] [pnp_method=0]\n", argv[0]);
         fprintf(stderr, "  detect_color: 0=保留红(滤蓝)  1=保留蓝(滤红)\n");
+        fprintf(stderr, "  pnp_method:   0=solvePnP 单解(IPPE)  1=solvePnPGeneric 双解选优\n");
         return -1;
     }
     string video_path = argv[1];
     int detect_color = argc > 2 ? atoi(argv[2]) : 0;
+    int pnp_method = argc > 4 ? atoi(argv[4]) : 0;
     string out_path = argc > 3
         ? argv[3]
         : video_path.substr(0, video_path.find_last_of('.')) + "_rp_out.avi";
@@ -37,8 +40,9 @@ int main(int argc, char** argv) {
     int frame_w = (int)cap.get(CAP_PROP_FRAME_WIDTH);
     int frame_h = (int)cap.get(CAP_PROP_FRAME_HEIGHT);
     double fps_in = cap.get(CAP_PROP_FPS);
-    printf("视频 %s  %dx%d  %.1ffps  输入640x640, detect_color=%d\n",
-           video_path.c_str(), frame_w, frame_h, fps_in, detect_color);
+    printf("视频 %s  %dx%d  %.1ffps  输入640x640, detect_color=%d, pnp_method=%s\n",
+           video_path.c_str(), frame_w, frame_h, fps_in, detect_color,
+           pnp_method == 1 ? "solvePnPGeneric" : "solvePnP");
 
     VideoWriter writer;
     writer.open(out_path, VideoWriter::fourcc('M', 'J', 'P', 'G'), fps_in, Size(frame_w, frame_h));
@@ -55,6 +59,7 @@ int main(int argc, char** argv) {
     int64 t0 = getTickCount();
 
     Solver solver;
+    if (pnp_method == 1) solver.setMethod(PnPMethod::GENERIC);
 
     while (true) {
         cap >> frame;
