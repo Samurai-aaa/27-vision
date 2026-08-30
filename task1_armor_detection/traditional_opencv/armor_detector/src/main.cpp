@@ -78,7 +78,7 @@ int main(int argc, char ** argv)
     // 2. 加载配置：视频路径（命令行没给时用配置里的）、检测颜色、二值化阈值、灯条/装甲板参数
     auto p = loadParams(config_path);
     if (video_path.empty()) {
-        video_path = p.count("video_path") ? p["video_path"] : "../video_input/装甲板.avi";
+        video_path = p.count("video_path") ? p["video_path"] : "../../video_input/装甲板.avi";
     }
 
     // 输出视频路径：命令行第 3 个参数优先；否则用配置里的 video_output；

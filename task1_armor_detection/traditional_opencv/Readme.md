@@ -28,7 +28,7 @@ traditional_opencv/
 ├── video_output/              # 预留输出目录
 └── Readme.md
 
-> 测试视频统一放在 task1 共享目录 `../video_input/`（blu.avi / red.avi / 装甲板.avi，不入 git）
+> 测试视频统一放在项目顶层 `../../video_input/`（blu.avi / red.avi / 装甲板.avi，不入 git）
 ```
 
 ## 编译
@@ -52,16 +52,16 @@ cmake --build armor_detector/build
 # 1. 直接运行（视频/颜色/阈值等全部用 config 里的值，输出到 config 的 video_output）
 ./armor_detector/build/armor_detector
 
-# 2. 指定视频（覆盖配置里的 video_path，输出自动为 video_input/xxx_out.avi）
-./armor_detector/build/armor_detector video_input/red.avi
-./armor_detector/build/armor_detector video_input/blu.avi
-./armor_detector/build/armor_detector video_input/装甲板.avi
+# 2. 指定视频（覆盖配置里的 video_path，输出自动为 ../../video_input/xxx_out.avi）
+./armor_detector/build/armor_detector ../../video_input/red.avi
+./armor_detector/build/armor_detector ../../video_input/blu.avi
+./armor_detector/build/armor_detector ../../video_input/装甲板.avi
 
 # 3. 指定视频 + 指定配置文件
-./armor_detector/build/armor_detector video_input/red.avi config/detector_params.txt
+./armor_detector/build/armor_detector ../../video_input/red.avi config/detector_params.txt
 
 # 4. 指定视频 + 配置文件 + 输出路径（任意位置，需先确保目录存在）
-./armor_detector/build/armor_detector video_input/red.avi config/detector_params.txt video_output/red_out.avi
+./armor_detector/build/armor_detector ../../video_input/red.avi config/detector_params.txt video_output/red_out.avi
 ```
 
 窗口打开后按 **q** 退出。
@@ -72,7 +72,7 @@ cmake --build armor_detector/build
 
 ```bash
 ./armor_detector/build/armor_detector --debug
-./armor_detector/build/armor_detector video_input/red.avi --debug
+./armor_detector/build/armor_detector ../../video_input/red.avi --debug
 ```
 
 终端输出示例：
@@ -90,7 +90,7 @@ frame 4: lights=2 armors=1 [SMALL conf=0.78]
 
 | 参数 | 默认 | 含义 |
 |---|---|---|
-| `video_path` | `video_input/装甲板.avi` | 测试视频路径（相对项目根目录） |
+| `video_path` | `../../video_input/装甲板.avi` | 测试视频路径（相对本目录运行时，指向项目顶层 video_input/） |
 | `detect_color` | `2` | 检测颜色：`0`=红 `1`=蓝 `2`=红蓝都检 |
 | `binary_thres` | `120` | 灰度二值化阈值（0~255），越小越易把暗色误判为灯条 |
 | `light_min_ratio` / `light_max_ratio` | `0.1` / `0.4` | 灯条短边/长边比例范围，细长灯条应远小于 1 |
