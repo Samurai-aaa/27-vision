@@ -1,0 +1,12 @@
+# 视频文件（不提交）
+video_input/
+video_output/
+*.avi
+*.mp4
+*.mkv
+*.mov
+*.flv
+*.wmv
+
+# 编辑器配置
+.vscode/
