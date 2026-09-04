@@ -1,0 +1,8 @@
+# tracker_node 参数（无需每次命令行手敲；改这里后重启节点生效）
+# 加载方式：ros2 launch tracker tracker.launch.py
+tracker_node:
+  ros__parameters:
+    max_match_distance: 0.2    # 门控：预测板 vs 观测板位置差上限 (m)，太大易锁错车
+    max_match_yaw_diff: 1.0    # 门控：板朝向角差上限 (rad)
+    tracking_thres: 5          # DETECTING → TRACKING 需连续匹配帧数
+    lost_time_thres: 0.3       # TEMP_LOST 持续该秒数后回 LOST（图像真正断流时兜底）

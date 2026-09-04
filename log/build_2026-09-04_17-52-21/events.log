@@ -1,0 +1,10 @@
+[0.000000] (-) TimerEvent: {}
+[0.000067] (-) JobUnselected: {'identifier': 'armor_detector'}
+[0.000082] (-) JobUnselected: {'identifier': 'armor_interfaces'}
+[0.000092] (-) JobUnselected: {'identifier': 'detector'}
+[0.000100] (-) JobUnselected: {'identifier': 'rp_detect'}
+[0.000108] (-) JobUnselected: {'identifier': 'rp_detect'}
+[0.000117] (tracker) JobQueued: {'identifier': 'tracker', 'dependencies': OrderedDict([('armor_interfaces', '/home/samurai/Workspaces/27-vision-dev/install/armor_interfaces')])}
+[0.000131] (tracker) JobStarted: {'identifier': 'tracker'}
+[0.012482] (tracker) JobEnded: {'identifier': 'tracker', 'rc': 1}
+[0.023003] (-) EventReactorShutdown: {}

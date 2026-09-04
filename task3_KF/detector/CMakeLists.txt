@@ -35,7 +35,7 @@ target_link_libraries(detector_node ${OpenCV_LIBS} openvino::runtime)
 # video_player_node：源文件就绪后自动纳入构建
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/video_player_node.cpp")
   add_executable(video_player_node src/video_player_node.cpp)
-  ament_target_dependencies(video_player_node rclcpp sensor_msgs)
+  ament_target_dependencies(video_player_node rclcpp sensor_msgs cv_bridge)
   target_link_libraries(video_player_node ${OpenCV_LIBS})
   list(APPEND DETECTOR_TARGETS video_player_node)
 endif()
@@ -46,5 +46,8 @@ install(TARGETS detector_node ${DETECTOR_TARGETS}
 
 # 模型随包安装，节点用 ament_index_cpp 定位 share 目录，摆脱相对路径依赖
 install(DIRECTORY Model DESTINATION share/${PROJECT_NAME})
+
+# launch 文件随包安装
+install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
 
 ament_package()

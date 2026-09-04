@@ -18,6 +18,7 @@ enum class ArmorType{
 };
 
 struct Armor {
+
     Armor() = default;
 
     // 输入：4 个角点（原图像素坐标），顺序 TL,BL,BR,TR

@@ -6,6 +6,7 @@
 #include <opencv2/core/quaternion.hpp>
 
 // STD
+#include <cstdio>
 #include <algorithm>
 #include <map>
 #include <memory>
@@ -26,7 +27,6 @@ DetectorNode::DetectorNode(const rclcpp::NodeOptions & options)
     RCLCPP_INFO(this->get_logger(), "Starting DetectorNode!");
 
     detect_color_ = declare_parameter<int>("detect_color", 0);
-    frame_id_     = declare_parameter<std::string>("frame_id", "camera_optical_frame");
 
     infer_  = initInfer();
     solver_ = std::make_unique<Solver>();
@@ -68,7 +68,7 @@ void DetectorNode::imageCallback(const sensor_msgs::msg::Image::ConstSharedPtr i
 
     armors_msg_.armors.clear();                    // 成员消息复用，必须先 clear
     armors_msg_.header.stamp = img_msg->header.stamp;   // 继承图像时间戳，勿用 now()
-    armors_msg_.header.frame_id = frame_id_;
+    armors_msg_.header.frame_id = img_msg->header.frame_id;
 
     std::vector<Armor> armors;                     // 内部 Armor（画图/marker 用）
     for (const Object & obj : infer_->tmp_objects) {
@@ -95,7 +95,31 @@ void DetectorNode::imageCallback(const sensor_msgs::msg::Image::ConstSharedPtr i
     armors_pub_->publish(armors_msg_);
 
     if (marker_pub_) publishMarkers(armors);
-    if (final_img_pub_) { /* 画框/角点/z轴/文本 → CvImage → final_img_pub_->publish() */ }
+
+    // debug 标注图：四点框 + 角点 + 类别/置信度 + 距离/yaw/重投影误差 + z 轴
+    if (final_img_pub_) {
+        for (const Armor & a : armors) {
+            cv::Scalar c = (a.color == 1) ? cv::Scalar(0, 0, 255) : cv::Scalar(255, 0, 0);  // 1=红 0=蓝
+            for (int k = 0; k < 4; k++)
+                cv::line(frame, a.corners[k], a.corners[(k + 1) % 4], c, 2);
+            for (const auto & p : a.corners) cv::circle(frame, p, 3, c, -1);
+
+            const char * label = (a.label >= 0 && a.label < 9) ? kLabels[a.label] : "?";
+            char text[64];
+            snprintf(text, sizeof(text), "%s %.2f", label, a.prob);
+            cv::putText(frame, text, cv::Point2f(a.corners[0].x, a.corners[0].y - 8),
+                        cv::FONT_HERSHEY_SIMPLEX, 0.7, c, 2);
+
+            char txt[64];
+            snprintf(txt, sizeof(txt), "%.2fm yaw=%.1f err=%.0f",
+                     a.distance, a.yaw, a.reproj_err);
+            cv::putText(frame, txt, cv::Point2f(a.corners[0].x, a.corners[0].y - 28),
+                        cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 255, 255), 2);
+
+            solver_->drawZAxis(frame, a);
+        }
+        final_img_pub_->publish(*cv_bridge::CvImage(armors_msg_.header, "bgr8", frame).toImageMsg());
+    }
 };
 
 std::unique_ptr<OpenvinoInfer> DetectorNode::initInfer() {
@@ -119,7 +143,7 @@ void DetectorNode::publishMarkers(const std::vector<Armor> & armors) {
     marker_array_.markers.clear();
     for (size_t i = 0; i < armors.size(); i++) {
         armor_marker_.header.stamp = armors_msg_.header.stamp;
-        armor_marker_.header.frame_id = frame_id_;
+        armor_marker_.header.frame_id = armors_msg_.header.frame_id;
         armor_marker_.ns = "armor";  armor_marker_.id = i;
         armor_marker_.type = visualization_msgs::msg::Marker::CUBE;
         armor_marker_.action = visualization_msgs::msg::Marker::ADD;
