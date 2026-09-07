@@ -27,7 +27,7 @@ rp24_nn_pnp/
 | --- | --- |
 | `OpenvinoInfer` | 封装 OpenVINO 推理（NHWC→RGB 归一化预处理）、后处理：置信度阈值、颜色/类别独热解码、NMS。结果写入 `tmp_objects`（`Object`：`rect` / `landmarks[8]` / `label` / `prob` / `color` / `length` / `width` / `ratio`） |
 | `armor` | `armorFromObject(obj, sx, sy)`：把 640×640 图上的 landmarks 各向异性映射回原图、按 ratio 判定大小装甲板、透传 label/color/prob |
-| `Solver` | 6-DOF PnP 双模式：`solvePose`（`SOLVEPNP_IPPE` 单解）或 `solvePnPGeneric`（IPPE 双解中选优）、`distance`（tvec 模长 mm→m）、`yaw`（板面法线在相机 XZ 平面的偏角）、`projectPoint`、`drawZAxis` |
+| `Solver` | 6-DOF PnP 7 种解算方式，统一走 `solvePose` 分派：0=双解（`solvePnPGeneric`-IPPE，IPPE 两解中选优）、1=单解（`solvePnP`-IPPE）、2=SQPNP、3=EPNP、4=ITERATIVE、5=P3P、6=AP3P（1~6 走 `solveSingle` 单解）；另提供 `distance`（tvec 模长 mm→m）、`yaw`（板面法线在相机 XZ 平面的偏角）、`projectPoint`、`drawZAxis`。`solvePnPGeneric` 会把未选中的另一解写进 `Armor.rvec_alt/tvec_alt`，供上层用另一颜色画出来对照。解出成功统一收口到 `postProcessYaw`：记录 `yaw_raw`，做 **yaw 重投影校验/绕竖轴遍历精修**（见下方小节） |
 
 ### 坐标与数据约定
 
@@ -47,6 +47,38 @@ rp24_nn_pnp/
    （label：G,1,2,3,4,5,O,Bs,Bb；红框=红车，蓝框=蓝车）
 2. 装甲板的 **PnP 位姿**：黄色文本标注 `距离(m) + yaw(°)`，绿色线段为装甲板
    局部坐标系 `(0,0,0)→(0,0,50)`（mm）在图像上的**重投影**（z 轴方向）
+3. 双解模式（`pnp_method=0`）把 IPPE **双解都画出来**：绿轴 = 选中的解
+   （板面朝相机 + 重投影误差最小），**橙轴 = 未选中的另一解**（镜像假设）——
+   平面目标前后两解投影到几乎同一组角点，只有 z 轴方向能区分，橙色用于对照双解歧义；
+   其余模式（1~6）为各内核 `solvePnP` 单解，只画绿轴，无橙轴
+4. 画面左上角 info 行下方有**黄字标题标注当前方法 tag**（如 `SQPNP`/`EPNP`/
+   `ITERATIVE`/`P3P`/`AP3P`/`IPPE 单解`/`IPPE 双解`），录制后看视频即知用的哪个方法
+5. 解算后对每块做 **yaw 重投影校验**：误差超出阈值才触发绕竖轴遍历择优（不改变正常
+   帧的 yaw，见下节）；正常帧行为与 1.1.0 一致，多画/少画无变化
+
+## yaw 重投影校验与绕竖轴精修
+
+PnP 解出的 pose 只能保证 4 个 3D 角点投影到检测角点，yaw 本身是否可靠需要二次校验。
+对每块成功解出的装甲板，`postProcessYaw` 做：
+
+1. **校验**：把当前姿态的 3D 板 4 角点重投影回图像，与 NN 检测 4 角点逐点算 L2 像素
+   距离之和 `err0`（写 `Armor.yaw_refine_err0`）。误差和 ≤ 阈值（默认 6px）→ 认为 yaw
+   解算贴合图像，不动，直接返回。
+2. **遍历择优**（误差过大时）：把整块板绕**相机竖轴（y）**在解算 yaw 附近
+   `±search_range_deg`（默认 15°）按 `search_step_deg`（默认 0.5°）逐度重投影
+   （`R ← Ry(Δ)·R`，板心 `tvec` 不动），取误差和最小者。**只有严格减小**才更新
+   `rvec/yaw`（`yaw_refined=true`），否则保持原解。
+3. **留档对照**：PnP 原始 yaw 存 `Armor.yaw_raw`，精修前后误差存 `err0/err1`，末尾
+   统计打印触发率与误差变化。
+
+配置走 `YawRefineConfig`（见 `include/solver.hpp`），在 `Solver::setYawRefineConfig`
+可整体开关或调参；默认 `enable=true, thresh_px=6, search_range_deg=15, search_step_deg=0.5`。
+
+**验证（red.avi，双解 IPPE，4707 块 PnP 全成功）**：全部块重投影误差和均值 1.53px、
+p90 2.34、p99 2.90、max 3.79px，均低于 6px 阈值 → 精修 0 触发，即 IPPE 的 yaw 对图像
+已贴合、无需扫描。该兜底主要用于初始姿态投影本身偏大的情况（如 EPNP 对共面点退化，
+同数据下 err0 均值约 67px、触发率 ~94%，经绕竖轴扫描可降一部分）；IPPE 类内核几乎不会
+触发。注意：镜像双解投影到几乎同一组角点，纯角点重投影误差分辨不了"选错镜像解"。
 
 ## 运行指令
 
@@ -80,15 +112,21 @@ cmake --build build
 | 输入视频路径 | 必填，待检测的视频文件（测试视频统一在项目顶层 `../../video_input/`） | — |
 | detect_color | 检测颜色：`0`=保留红(滤蓝)，`1`=保留蓝(滤红) | `0` |
 | 输出视频路径 | 标注结果写入该 AVI 文件 | `<输入名>_rp_out.avi` |
-| pnp_method | PnP 解算方式：`0`=solvePnP 单解(IPPE)，`1`=solvePnPGeneric 双解选优 | `0` |
+| pnp_method | PnP 解算方式：`0`=双解（solvePnPGeneric-IPPE，绿=选中解，橙=未选中另一解）；`1`=单解（solvePnP-IPPE）；`2`=SQPNP；`3`=EPNP；`4`=ITERATIVE；`5`=P3P；`6`=AP3P（1~6 为 `solvePnP` 单解） | `0` |
 
 示例：
 
 ```bash
-# 检测红色（默认 solvePnP 单解）
-./build/rp_detect ../../video_input/red.avi 0 video_output/red_out.avi
-# 检测红色（solvePnPGeneric 双解选优）
-./build/rp_detect ../../video_input/red.avi 0 video_output/red_out_generic.avi 1
+# 检测红色（默认双解：绿=选中解，橙=另一解）
+./build/rp_detect ../../video_input/red.avi 0 video_output/red_dual.avi 0
+# 检测红色（单解 IPPE）
+./build/rp_detect ../../video_input/red.avi 0 video_output/red_single.avi 1
+# 换内核：SQPNP / EPNP / ITERATIVE / P3P / AP3P（终端第 4 个参数选择）
+./build/rp_detect ../../video_input/red.avi 0 video_output/red_sqpn.avi 2
+./build/rp_detect ../../video_input/red.avi 0 video_output/red_epnp.avi 3
+./build/rp_detect ../../video_input/red.avi 0 video_output/red_iter.avi 4
+./build/rp_detect ../../video_input/red.avi 0 video_output/red_p3p.avi  5
+./build/rp_detect ../../video_input/red.avi 0 video_output/red_ap3p.avi 6
 # 检测蓝色
 ./build/rp_detect ../../video_input/blu.avi 1
 ```
