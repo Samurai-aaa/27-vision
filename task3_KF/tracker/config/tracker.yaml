@@ -1,8 +1,30 @@
-# tracker_node 参数（无需每次命令行手敲；改这里后重启节点生效）
-# 加载方式：ros2 launch tracker tracker.launch.py
+# tracker_node 参数（整车 EKF：小陀螺车 4 板 / 前哨 3 板）
 tracker_node:
   ros__parameters:
-    max_match_distance: 0.2    # 门控：预测板 vs 观测板位置差上限 (m)，太大易锁错车
-    max_match_yaw_diff: 1.0    # 门控：板朝向角差上限 (rad)
-    tracking_thres: 5          # DETECTING → TRACKING 需连续匹配帧数
-    lost_time_thres: 0.3       # TEMP_LOST 持续该秒数后回 LOST（图像真正断流时兜底）
+    # —— 整车数据关联双阈值门控 ——
+    max_match_distance: 0.2    # 观测板心与整车预测板心的最大位置差，m
+    max_match_yaw_diff: 1.0    # 观测板朝向与预测板朝向的最大角度差，rad
+
+    # —— 整车初始化覆盖（0 = 按车牌默认：前哨 O→3板/半径0.2765，其余→4板/半径0.2）——
+    # red.avi 哨兵 G 实测标定：4 板、板心到旋转轴半径 ≈ 0.31 m（同帧两板 3D 锚）
+    armor_num: 4
+    radius_init: 0.31
+
+    # —— 状态机 ——
+    tracking_thres: 5      # DETECTING → TRACKING 需要的连续命中帧数
+    lost_time_thres: 0.3   # TEMP_LOST 持续超过该秒数 → LOST
+
+    # —— 渲染用相机内参（与 detector 标定一致，1440×1080）——
+    fx: 2556.2545862166521
+    fy: 2553.5331992802749
+    cx: 705.83803766013978
+    cy: 584.62889512335437
+    armor_width: 0.13     # 绘制板宽（小装甲），m
+    armor_height: 0.055   # 绘制板高，m
+
+    # 可视化开关：左上整车状态 HUD（Kalman 状态实时文本）——
+    show_hud: true
+
+    # —— 需求⑤：未来状态外推可视化（只画框，不写进滤波/消息）——
+    future_ms: 150.0    # 未来外推提前量 ms：白=模型现在，品红虚线= future_ms 后预测板
+    show_future: true   # 画未来板框开关（掉帧外推/实测帧都叠这一层）

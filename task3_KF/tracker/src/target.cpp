@@ -1,5 +1,6 @@
 #include "target.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 #include "math_tools.hpp"
@@ -32,14 +33,15 @@ Target::Target(
     t_(t)
 {
     auto r = radius;
-    const Eigen::Vector3d & xyz = armor.xyz;  // 板中心（相机系）
-    double a = armor.yaw;                     // 板朝向角 = 车体朝向
+    const Eigen::Vector3d & xyz = armor.xyz;  // 板中心（相机系 x右 y下 z前）
+    double a = armor.yaw;  // 板法线在相机 x-z 水平面的方位角 atan2(n_z,n_x)（前向 ∈(-π,0)）
 
-    // 旋转中心的坐标：板装在车体对角上，板平面距旋转轴的水平距离为 r，
-    // 板法线水平方向即车体朝向 → 从板中心沿朝向前进 r 即车心
-    auto center_x = xyz[0] + r * std::cos(a);
-    auto center_y = xyz[1] + r * std::sin(a);
-    auto center_z = xyz[2];  // 车心与所观测的板同高（板间高度差归 h 维管）
+    // 车心反推：整车绕相机 y（竖直）轴在 x-z 平面水平公转，板心
+    //   p = C + r·(cos a, 0, sin a)   （法线径向朝外 = (cos a,0,sin a)；
+    //    前向板 sin a<0 → 板比车心更近相机）→  C = p − r·(cos a, 0, sin a)
+    auto center_x = xyz[0] - r * std::cos(a);
+    auto center_y = xyz[1];  // 首板即与车心同高（板间高度差归 dz 维管）
+    auto center_z = xyz[2] - r * std::sin(a);
 
     Eigen::VectorXd x0{{center_x, 0, center_y, 0, center_z, 0, a, 0, r, 0, 0}};
     Eigen::MatrixXd P0 = P0_dig.asDiagonal();
@@ -124,7 +126,7 @@ void Target::predict(double dt)
     ekf_.predict(F, Q, f);
 }
 
-void Target::update(const ObservedArmor & armor)
+int Target::update(const ObservedArmor & armor)
 {
     // 数据关联：观测对应的模型里的块板
     int id = 0;
@@ -141,14 +143,12 @@ void Target::update(const ObservedArmor & armor)
             return a.first.head(3).norm() < b.first.head(3).norm();
         });
 
-    double obs_yaw_line = std::atan2(armor.xyz[1], armor.xyz[0]);  // 观测方位角
-
-    // 最近 3 块里选 "|Δ板朝向| + |Δ方位|" 综合误差最小者
+    // 最近 3 块里选 "|Δ板法线方位角|" 最小者。新几何板只绕竖直轴公转，块间靠相位
+    // φ 区分（邻板差 2π/N），而各板同高 → 屏幕方位 atan2(y,x) 无区分度，故只比 φ。
     int n_cand = std::min(3, armor_num_);  // 防止 2 板车（平衡步兵）越界
     for (int i = 0; i < n_cand; i++) {
         const auto & xyza = xyza_i_list[i].first;
-        auto angle_error = std::abs(limit_rad(armor.yaw - xyza[3])) +
-                           std::abs(limit_rad(obs_yaw_line - std::atan2(xyza[1], xyza[0])));
+        auto angle_error = std::abs(limit_rad(armor.yaw - xyza[3]));
         if (angle_error < min_angle_error) {
             id = xyza_i_list[i].second;
             min_angle_error = angle_error;
@@ -163,6 +163,7 @@ void Target::update(const ObservedArmor & armor)
     update_count_++;
 
     update_ypda(armor, id);
+    return id;
 }
 
 Eigen::VectorXd Target::ekf_x() const { return ekf_.x; }
@@ -171,12 +172,42 @@ void Target::set_x(const Eigen::VectorXd & x) { ekf_.x = x; }
 
 const ExtendedKalmanFilter & Target::ekf() const { return ekf_; }
 
+Eigen::Vector3d Target::center() const { return {ekf_.x[0], ekf_.x[2], ekf_.x[4]}; }
+
+Eigen::Vector3d Target::velocity() const { return {ekf_.x[1], ekf_.x[3], ekf_.x[5]}; }
+
+Eigen::Vector3d Target::armor_xyz(int id) const { return h_armor_xyz(ekf_.x, id); }
+
+int Target::armor_num() const { return armor_num_; }
+
 std::vector<Eigen::Vector4d> Target::armor_xyza_list() const
 {
     std::vector<Eigen::Vector4d> list;
     for (int i = 0; i < armor_num_; i++) {
         auto angle = limit_rad(ekf_.x[6] + i * 2 * M_PI / armor_num_);
         Eigen::Vector3d xyz = h_armor_xyz(ekf_.x, i);
+        list.push_back({xyz[0], xyz[1], xyz[2], angle});
+    }
+    return list;
+}
+
+// 需求⑤ 只读未来外推。转移口径与 predict(double) 的状态矩阵 F 完全一致
+// （位置 += 速度·τ、yaw += v_yaw·τ 并归一化；r/l/dz 在 τ 窗口内视为不变），但只
+// 作用在副本上、不写 ekf_ 与 t_——渲染层若直接插一次 predict 会推进真实状态，
+// 下一帧 predict(now) 的 dt 就把这 τ 多算一遍，滤波被污染。τ 内不建模新观测/过程
+// 噪声：纯"当前估计的速度/转速把目标带到哪"的瞄准提前量预览。
+std::vector<Eigen::Vector4d> Target::armor_xyza_list_at(double tau) const
+{
+    Eigen::VectorXd xf = ekf_.x;
+    xf[0] += xf[1] * tau;  // cx += vx·τ
+    xf[2] += xf[3] * tau;  // cy += vy·τ
+    xf[4] += xf[5] * tau;  // cz += vz·τ
+    xf[6] = limit_rad(xf[6] + xf[7] * tau);  // 公转相位推进并归一化
+
+    std::vector<Eigen::Vector4d> list;
+    for (int i = 0; i < armor_num_; i++) {
+        auto angle = limit_rad(xf[6] + i * 2 * M_PI / armor_num_);
+        Eigen::Vector3d xyz = h_armor_xyz(xf, i);
         list.push_back({xyz[0], xyz[1], xyz[2], angle});
     }
     return list;
@@ -201,15 +232,20 @@ void Target::update_ypda(const ObservedArmor & armor, int id)
     // 观测雅可比（当前状态处线性化）
     Eigen::MatrixXd H = h_jacobian(ekf_.x, id);
 
-    // R 自适应：板法线偏离视线（delta_angle）越大 → 斜视角下 PnP 朝向越不可信；
-    // 距离越远 → 距离观测噪声越大（log 模型）
-    auto center_yaw = std::atan2(armor.xyz[1], armor.xyz[0]);
-    auto delta_angle = limit_rad(armor.yaw - center_yaw);
+    // R 自适应（按掠射角 delta）：板面正对相机时 PnP 法线方位最可信，越偏切线越不可
+    // 信。delta = 板法线 (cos yaw,0,sin yaw) 与指向相机的视线 −p 的夹角（用预测板心 p）。
+    // R 分块顺序与观测 z=[方位,俯仰,距离,板角] 对齐：距离噪声随距离增大(log)，板角
+    // 噪声随掠射增大(log(delta+1))。
+    Eigen::Vector3d p_plate = h_armor_xyz(ekf_.x, id);
+    double cos_yaw = std::cos(armor.yaw), sin_yaw = std::sin(armor.yaw);
+    double cos_delta = -1.0 / std::max(1e-6, p_plate.norm()) * (cos_yaw * p_plate[0] +
+                                                                sin_yaw * p_plate[2]);
+    double delta_angle = std::acos(std::clamp(cos_delta, -1.0, 1.0));
     Eigen::Vector3d ypd_obs = xyz2ypd(armor.xyz);
     Eigen::VectorXd R_dig{
         {4e-3, 4e-3,
-         log(std::abs(delta_angle) + 1) + 1,
-         log(std::abs(ypd_obs[2]) + 1) / 200 + 9e-2}};
+         log(std::abs(ypd_obs[2]) + 1) / 200 + 9e-2,
+         log(delta_angle + 1) + 1}};
     Eigen::MatrixXd R = R_dig.asDiagonal();
 
     // h: 整车状态 → 观测空间 [方位, 俯仰, 距离, 板朝向角]
@@ -237,13 +273,16 @@ void Target::update_ypda(const ObservedArmor & armor, int id)
 Eigen::Vector3d Target::h_armor_xyz(const Eigen::VectorXd & x, int id) const
 {
     auto angle = limit_rad(x[6] + id * 2 * M_PI / armor_num_);
-    // 4 板车对角交替长短轴/高度差（id 1、3 用 r+l 和 z+h）；2/3 板车只有一组
+    // 整车绕相机 y（竖直）轴在 x-z 水平面公转：板心 = 车心 + r·(cosφ, 0, sinφ)，
+    // 板面竖直、法线径向朝外 n̂=(cosφ,0,sinφ)；前向板 sinφ<0（n̂ 的 z 分量指相机）。
+    // 高差沿相机 y：dz>0 = 板比车心更高 → 相机 y 向下故相减。id 1、3 用长半径 r+l 并
+    // 抬 dz（4 板车对角两组对角板异高），2/3 板车只有一组。
     auto use_l_h = (armor_num_ == 4) && (id == 1 || id == 3);
 
     auto r = (use_l_h) ? x[8] + x[9] : x[8];
-    auto armor_x = x[0] - r * std::cos(angle);
-    auto armor_y = x[2] - r * std::sin(angle);
-    auto armor_z = (use_l_h) ? x[4] + x[10] : x[4];
+    auto armor_x = x[0] + r * std::cos(angle);
+    auto armor_y = x[2] - ((use_l_h) ? x[10] : 0.0);
+    auto armor_z = x[4] + r * std::sin(angle);
 
     return {armor_x, armor_y, armor_z};
 }
@@ -253,24 +292,26 @@ Eigen::MatrixXd Target::h_jacobian(const Eigen::VectorXd & x, int id) const
     auto angle = limit_rad(x[6] + id * 2 * M_PI / armor_num_);
     auto use_l_h = (armor_num_ == 4) && (id == 1 || id == 3);
 
+    // 与 h_armor_xyz 对应：p=(x0+r cosφ, x2−dz, x4+r sinφ)，r=(use? x8+x9 : x8)
     auto r = (use_l_h) ? x[8] + x[9] : x[8];
-    auto dx_da = r * std::sin(angle);
-    auto dy_da = -r * std::cos(angle);
+    auto dx_da = -r * std::sin(angle);              // ∂px/∂yaw（相位）
+    auto dz_da = r * std::cos(angle);               // ∂pz/∂yaw
 
-    auto dx_dr = -std::cos(angle);
-    auto dy_dr = -std::sin(angle);
-    auto dx_dl = (use_l_h) ? -std::cos(angle) : 0.0;
-    auto dy_dl = (use_l_h) ? -std::sin(angle) : 0.0;
+    auto dx_dr = std::cos(angle);                   // ∂px/∂r
+    auto dz_dr = std::sin(angle);                   // ∂pz/∂r
+    auto dx_dl = (use_l_h) ? std::cos(angle) : 0.0; // ∂px/∂l（id1/3 长半径）
+    auto dz_dl = (use_l_h) ? std::sin(angle) : 0.0; // ∂pz/∂l
 
-    auto dz_dh = (use_l_h) ? 1.0 : 0.0;
+    auto dy_dh = (use_l_h) ? -1.0 : 0.0;            // ∂py/∂dz（相机 y 向下，dz>0=更高）
 
     // clang-format off
-    // 状态 → 板 [x,y,z,angle] 的雅可比（4×11）
+    // 状态 → 板 [x,y,z,angle] 的雅可比（4×11）。板绕竖直轴公转：yaw 相位只驱动
+    // x/z 分量，竖直 y 只由车心 y(x2) 与 dz 高度偏置贡献。
     Eigen::MatrixXd H_armor_xyza{
-        {1, 0, 0, 0, 0, 0, dx_da, 0, dx_dr, dx_dl,     0},
-        {0, 0, 1, 0, 0, 0, dy_da, 0, dy_dr, dy_dl,     0},
-        {0, 0, 0, 0, 1, 0,     0, 0,     0,     0, dz_dh},
-        {0, 0, 0, 0, 0, 0,     1, 0,     0,     0,     0}
+        {1, 0, 0, 0, 0, 0,  dx_da, 0, dx_dr, dx_dl,      0},
+        {0, 0, 1, 0, 0, 0,      0, 0,     0,     0,  dy_dh},
+        {0, 0, 0, 0, 1, 0,  dz_da, 0, dz_dr, dz_dl,      0},
+        {0, 0, 0, 0, 0, 0,      1, 0,     0,     0,      0}
     };
 
     Eigen::Vector3d armor_xyz = h_armor_xyz(x, id);

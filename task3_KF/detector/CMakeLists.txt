@@ -47,7 +47,7 @@ install(TARGETS detector_node ${DETECTOR_TARGETS}
 # 模型随包安装，节点用 ament_index_cpp 定位 share 目录，摆脱相对路径依赖
 install(DIRECTORY Model DESTINATION share/${PROJECT_NAME})
 
-# launch 文件随包安装
-install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
+# config（参数 yaml）+ launch 文件随包安装：launch 用 get_package_share_directory 定位 config
+install(DIRECTORY config launch DESTINATION share/${PROJECT_NAME})
 
 ament_package()

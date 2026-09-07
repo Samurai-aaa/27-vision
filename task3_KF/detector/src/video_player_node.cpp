@@ -8,6 +8,7 @@
 
 // STD
 #include <chrono>
+#include <cstdlib>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -22,6 +23,13 @@ public:
         fps_ = declare_parameter<double>("fps", 30.0);  // <=0 时自动取视频自身帧率
         loop_ = declare_parameter<bool>("loop", true);
         frame_id_ = declare_parameter<std::string>("frame_id", "camera_optical_frame");
+
+        // 路径支持 ~ 开头（config yaml 里写成 ~/ 更通用），展开成 $HOME 再打开
+        if (!video_path_.empty() && video_path_.front() == '~') {
+            if (const char * home = std::getenv("HOME")) {
+                video_path_ = std::string(home) + video_path_.substr(1);
+            }
+        }
 
         cap_.open(video_path_);
         if (!cap_.isOpened()) {

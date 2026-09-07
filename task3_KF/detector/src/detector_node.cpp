@@ -90,6 +90,10 @@ void DetectorNode::imageCallback(const sensor_msgs::msg::Image::ConstSharedPtr i
         m.pose.orientation.w = q.w;  m.pose.orientation.x = q.x;
         m.pose.orientation.y = q.y;  m.pose.orientation.z = q.z;
         m.reproj_err = a.reproj_err;
+        for (int k = 0; k < 4 && k < static_cast<int>(a.corners.size()); k++) {
+          m.corners_px[2 * k] = a.corners[k].x;
+          m.corners_px[2 * k + 1] = a.corners[k].y;
+        }
         armors_msg_.armors.push_back(m);
     }
     armors_pub_->publish(armors_msg_);
@@ -131,8 +135,11 @@ std::unique_ptr<OpenvinoInfer> DetectorNode::initInfer() {
 }
 
 void DetectorNode::createDebugPublishers() {
+    // 调试标注图用 SensorDataQoS（best-effort）：纯观看用途，宁可丢帧也绝不能
+    // 让慢的 rqt/viewer 反压阻塞推理链（reliable + 深度 10 会在慢消费者下写满队列
+    // 使 imageCallback 卡在 publish，表现为画面"中途冻住"）
     final_img_pub_ = create_publisher<sensor_msgs::msg::Image>(
-        "/armor_detector/final_img", 10);
+        "/armor_detector/final_img", rclcpp::SensorDataQoS());
 };
 
 void DetectorNode::destroyDebugPublishers() {

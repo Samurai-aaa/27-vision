@@ -2,3 +2,6 @@
 build/
 install/
 log/
+
+# 一键脚本录制的验证视频（video_output/track_*.avi，可随时重生成，不入 git）
+video_output/

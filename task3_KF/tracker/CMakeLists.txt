@@ -10,6 +10,8 @@ find_package(armor_interfaces REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(cv_bridge REQUIRED)   # 仅 tracker_node 2D 渲染用
+find_package(OpenCV REQUIRED)
 find_package(Eigen3 REQUIRED)
 
 # 算法层静态库：ekf / target / simple_target / tracker 纯 C++ 不依赖 ROS
@@ -26,10 +28,21 @@ target_link_libraries(tracker_core PUBLIC Eigen3::Eigen)
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/tracker_node.cpp")
   add_executable(tracker_node src/tracker_node.cpp)
   target_include_directories(tracker_node PRIVATE include)
-  target_link_libraries(tracker_node tracker_core)
+  target_link_libraries(tracker_node tracker_core ${OpenCV_LIBS})
   ament_target_dependencies(
-    tracker_node rclcpp armor_interfaces visualization_msgs geometry_msgs)
+    tracker_node rclcpp armor_interfaces visualization_msgs geometry_msgs
+    sensor_msgs cv_bridge)
   install(TARGETS tracker_node DESTINATION lib/${PROJECT_NAME})
+endif()
+
+# simple_tracker_node（需求①② 历史单板 KF 的 ROS 壳，独立 /simple_tracker/* 话题）
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/simple_tracker_node.cpp")
+  add_executable(simple_tracker_node src/simple_tracker_node.cpp)
+  target_include_directories(simple_tracker_node PRIVATE include)
+  target_link_libraries(simple_tracker_node tracker_core ${OpenCV_LIBS})
+  ament_target_dependencies(
+    simple_tracker_node rclcpp armor_interfaces sensor_msgs cv_bridge)
+  install(TARGETS simple_tracker_node DESTINATION lib/${PROJECT_NAME})
 endif()
 
 install(DIRECTORY include/ DESTINATION include)

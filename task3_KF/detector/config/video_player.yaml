@@ -1,0 +1,12 @@
+# video_player 虚拟相机参数（读本地视频按 fps 发布 /image）。
+# 上真车时此节点由真实相机驱动替换，detector 只认 /image 不受影响。
+video_player:
+  ros__parameters:
+    # 视频路径：换机器 / 换视频只改这一处即可（支持 ~ 展开，节点会自动换成 $HOME）。
+    # 视频约定在工作区外一层 video_input/；本机示例，其它机器改路径后无需再动 launch。
+    video_path: ~/Workspaces/27-vision-dev/video_input/red.avi
+
+    fps: 30.0              # 发布帧率；<=0 时取视频自身帧率
+    loop: false            # 播完一遍节点自动退出：一键录制把源视频完整一遍录下来自然收尾。
+                           #   想要持续循环联调/实时观看请改回 true（节点会一直播不自动停）
+    frame_id: camera_optical_frame

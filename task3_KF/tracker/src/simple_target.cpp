@@ -93,6 +93,15 @@ const ExtendedKalmanFilter & SimpleTarget::ekf() const { return ekf_; }
 
 Eigen::Vector3d SimpleTarget::armor_xyz() const { return H_ * ekf_.x; }
 
+Eigen::Vector3d SimpleTarget::velocity() const
+{
+  // 状态交错：每轴 [p, v(, a)]，速度恒在每轴 +1 下标
+  const int n_axis = (model_ == Model::CA) ? 3 : 2;
+  Eigen::Vector3d v;
+  for (int i = 0; i < 3; i++) v[i] = ekf_.x[i * n_axis + 1];
+  return v;
+}
+
 bool SimpleTarget::diverged() const
 {
   return !ekf_.x.allFinite() || ekf_.x.norm() > 50.0;

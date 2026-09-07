@@ -38,6 +38,7 @@ public:
   Eigen::VectorXd ekf_x() const;
   const ExtendedKalmanFilter & ekf() const;
   Eigen::Vector3d armor_xyz() const;  // 估计的板中心
+  Eigen::Vector3d velocity() const;   // 估计的板速度（按 CV/CA 布局抽）
   bool diverged() const;
 
 private:
