@@ -74,6 +74,7 @@ private:
   double radius_init_;          // 非 0 覆盖初始半径（实测标定，m）
   double fx_, fy_, cx_, cy_;             // 相机内参（与 detector 标定一致）
   double armor_width_, armor_height_;    // 绘制用的装甲板世界尺寸（m）
+  double plate_tilt_deg_ = 15.0;         // RM 装甲板默认上倾角（deg，实测前向板法线 n_y≈-sin15°）
   bool show_hud_;                        // 左上 HUD 开关（需求④ 可视化）
   double future_ms_ = 150.0;             // 需求⑤ 未来外推提前量 ms（白=现在，品红虚线=未来）
   bool show_future_ = true;              // 需求⑤ 画未来板框开关（纯可视化，不进滤波/消息）

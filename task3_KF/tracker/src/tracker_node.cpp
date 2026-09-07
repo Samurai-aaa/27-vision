@@ -73,6 +73,7 @@ TrackerNode::TrackerNode(const rclcpp::NodeOptions & options)
   cy_ = declare_parameter<double>("cy", 584.62889512335437);
   armor_width_ = declare_parameter<double>("armor_width", 0.13);     // 绘制板宽（小装甲）
   armor_height_ = declare_parameter<double>("armor_height", 0.055);  // 板高
+  plate_tilt_deg_ = declare_parameter<double>("plate_tilt_deg", 15.0);  // 板上倾角（deg）
   show_hud_ = declare_parameter<bool>("show_hud", true);             // 左上 HUD（需求④）
   // 需求⑤：未来状态外推可视化（只画框，不写进滤波/消息）——渲染层多叠一层
   // "current + future_ms 后"的预测板虚线框，作瞄准提前量预览。可运行时动态调。
@@ -117,16 +118,18 @@ void TrackerNode::onArmors(const armor_interfaces::msg::Armors::SharedPtr msg)
   obs.reserve(msg->armors.size());
   for (const auto & m : msg->armors) {
     if (!trackable(m.number)) continue;
-    // 首帧首个可跟踪板打一次法线三分量（板局部 z 轴在相机系的重建），供核对
-    // "前向板 n_z<0、n_y≈0（法线基本水平指相机）"这一整套几何的关键假设
+    // 首帧首个可跟踪板打一次法线三分量（板局部 z 轴在相机系的重建），供核对整车几何的
+    // 关键假设：前向板应 n_z<0（法线朝相机）；板上倾 plate_tilt_deg_（RM 默认 15°）→
+    // n_y≈−sin(上倾角)≈−0.26（实测约 −0.24，基本吻合，相机自身俯仰再加小量）。
     if (!sign_logged_) {
       sign_logged_ = true;
       const Eigen::Quaterniond qeq(
         m.pose.orientation.w, m.pose.orientation.x, m.pose.orientation.y, m.pose.orientation.z);
       const Eigen::Matrix3d R0 = qeq.toRotationMatrix();
       RCLCPP_INFO(
-        get_logger(), "板法线观测 相机系(n_x,n_y,n_z)=(%+.3f,%+.3f,%+.3f)  前向板应 n_z<0、n_y≈0",
-        R0(0, 2), R0(1, 2), R0(2, 2));
+        get_logger(),
+        "板法线观测 相机系(n_x,n_y,n_z)=(%+.3f,%+.3f,%+.3f)  前向板应 n_z<0、n_y≈−sin%.0f°",
+        R0(0, 2), R0(1, 2), R0(2, 2), plate_tilt_deg_);
     }
     ObservedArmor a;
     a.number = m.number;
@@ -255,10 +258,11 @@ void TrackerNode::publishMarker(const armor_interfaces::msg::Target & msg)
   arr.markers.push_back(center);
 
   // N 块预测装甲板（整车建模的装甲板集合可视化）。新几何：整车绕竖直轴在相机 x-z
-  // 水平面公转、板面竖直、法线径向朝外。用 CUBE 局部坐标架表达板朝向 ——
+  // 水平面公转、板面上倾 plate_tilt_deg_（RM 默认 15°，法线径向朝外并上抬）。用 CUBE
+  // 局部坐标架表达板朝向 ——
   //   局部 x = 宽向 t  =(−sinφ, 0, cosφ)（水平切向，随旋转扫过 x-z 圆环）
-  //   局部 y = 高向 u  =(0, -1, 0)       （竖直，相机 y 向下故顶在上为 -y）
-  //   局部 z = 法线 n̂  =(cosφ, 0, sinφ)  （径向朝外，前向板 sinφ<0）
+  //   局部 y = 高向 u  = R_tilt·(0, -1, 0)（板上倾后不再纯竖直：R_tilt=绕 t 转 −tilt）
+  //   局部 z = 法线 n̂  = R_tilt·(cosφ, 0, sinφ)（径向朝外并上抬，前向板 sinφ<0、n̂_y<0）
   // scale：x=板宽、y=板高、z=板厚。
   const auto xyza_list = tracker_->target->armor_xyza_list();
   for (size_t i = 0; i < xyza_list.size(); i++) {
@@ -276,13 +280,17 @@ void TrackerNode::publishMarker(const armor_interfaces::msg::Target & msg)
     plate.pose.position.x = xyza_list[i][0];
     plate.pose.position.y = xyza_list[i][1];
     plate.pose.position.z = xyza_list[i][2];
-    // R = [t | u | n̂]，右旋正交 → 转四元数
+    // R = [t | u | n̂]，右旋正交 → 转四元数。整块板绕宽向 t 转 −tilt 实现默认上倾：
+    // u0=(0,−1,0)（竖直）、n0=(cosφ,0,sinφ)（水平法线）同转 −tilt，n̂ 带上 −y 上抬分量。
     const double phi = xyza_list[i][3];
     const double cf = std::cos(phi), sf = std::sin(phi);
+    const Eigen::Vector3d tt{-sf, 0, cf};
+    const Eigen::Matrix3d Q(
+      Eigen::AngleAxisd(-plate_tilt_deg_ * CV_PI / 180.0, tt));
     Eigen::Matrix3d Rm;
-    Rm.col(0) = Eigen::Vector3d{-sf, 0, cf};
-    Rm.col(1) = Eigen::Vector3d{0, -1, 0};
-    Rm.col(2) = Eigen::Vector3d{cf, 0, sf};
+    Rm.col(0) = tt;                              // 宽向（水平，绕竖直轴公转不变）
+    Rm.col(1) = Q * Eigen::Vector3d{0, -1, 0};   // 高向（上倾后不纯竖直）
+    Rm.col(2) = Q * Eigen::Vector3d{cf, 0, sf};  // 法线（径向朝外 + 上抬）
     const Eigen::Quaterniond q(Rm);
     plate.pose.orientation.w = q.w();
     plate.pose.orientation.x = q.x();
@@ -326,13 +334,16 @@ void TrackerNode::renderAndPublish()
     pt = cv::Point(cvRound(fx_ * p[0] / p[2] + cx_), cvRound(fy_ * p[1] / p[2] + cy_));
     return true;
   };
-  // 板心 c、相位 phi 的竖直板矩形四角 → 图像。板宽向 t=(−sinφ,0,cosφ)（水平切向）、
-  // 高向 u=(0,−1,0)（竖直，相机 y 向下故顶在 −y）。任一角跑到相机后则不画。
+  // 板心 c、相位 phi 的板矩形四角 → 图像。宽向 t=(−sinφ,0,cosφ)（水平切向，绕竖直轴公转
+  // 扫过圆环）；高向 u = 把纯竖直 u0=(0,−1,0) 绕板宽轴 t 转 −plate_tilt_deg_（RM 装甲板
+  // 默认上倾 15°：板面上仰、顶边略后仰，前向板法线因此带 −y 上抬分量，实测 n_y≈−0.24）。
+  // 板心与相位不受倾角影响——板心仍是车心+r 圆环上的点。任一角跑到相机后则不画。
   const auto plate_quad = [&](const Eigen::Vector3d & c, double phi, cv::Point q[4]) -> bool {
     if (c[2] < 0.05) return false;
     const double cf = std::cos(phi), sf = std::sin(phi);
     const Eigen::Vector3d t{-sf, 0, cf};
-    const Eigen::Vector3d u{0, -1, 0};
+    const Eigen::Vector3d u = Eigen::AngleAxisd(-plate_tilt_deg_ * CV_PI / 180.0, t)
+                                * Eigen::Vector3d{0, -1, 0};
     const double hw = armor_width_ / 2.0, hh = armor_height_ / 2.0;
     const Eigen::Vector3d cor[4] = {
       c + hw * t + hh * u, c + hw * t - hh * u,
@@ -357,16 +368,16 @@ void TrackerNode::renderAndPublish()
   //    画法与 ① 同构（全板、竖直矩形），但线画虚线 + 品红，一眼区分"现在/未来"两圈
   //    转盘；只在最近一块未来板上挂一次 "t+xxxms" 标注。掉帧/实测帧都叠这层。
   if (tracker_->target && show_future_) {
-    // 沿每条边按"实/空各 ~6px"分段（画虚线，与 ①/② 的实线语义区分）
+    // 沿每条边按"实/空各 ~6px"分段画虚线（线宽 2，与 ①/② 的实线语义区分、更醒目）
     const auto dashed_edge = [&](cv::Point a, cv::Point b, const cv::Scalar & col) {
       const cv::Point d = b - a;
       const double len = std::sqrt(double(d.x) * d.x + double(d.y) * d.y);
-      if (len < 4.0) { cv::line(out, a, b, col, 1); return; }
-      const int n = std::max(1, int(len / 12.0));
+      if (len < 4.0) { cv::line(out, a, b, col, 2); return; }
+      const int n = std::max(1, int(len / 14.0));
       for (int k = 0; k < n; k++) {
         const double t0 = double(2 * k) / (2 * n), t1 = double(2 * k + 1) / (2 * n);
         cv::line(out, cv::Point(cvRound(a.x + t0 * d.x), cvRound(a.y + t0 * d.y)),
-                 cv::Point(cvRound(a.x + t1 * d.x), cvRound(a.y + t1 * d.y)), col, 1);
+                 cv::Point(cvRound(a.x + t1 * d.x), cvRound(a.y + t1 * d.y)), col, 2);
       }
     };
     const auto fut = tracker_->target->armor_xyza_list_at(future_ms_ / 1000.0);

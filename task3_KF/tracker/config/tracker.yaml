@@ -21,6 +21,9 @@ tracker_node:
     cy: 584.62889512335437
     armor_width: 0.13     # 绘制板宽（小装甲），m
     armor_height: 0.055   # 绘制板高，m
+    # RM 装甲板默认上倾角：板面朝上仰、顶边略后仰（实测前向板法线 n_y≈-sin(上倾角)≈-0.24）。
+    # 只影响板朝向/绘制/marker 的板倾，板心与相位不受（EKF 核心不动）。0 = 纯竖直板。
+    plate_tilt_deg: 15.0
 
     # 可视化开关：左上整车状态 HUD（Kalman 状态实时文本）——
     show_hud: true

@@ -5,11 +5,11 @@
 
 ## 1. 项目说明
 
-| 方向 | 算法层 | 状态向量 | 对应需求 |
-|---|---|---|---|
-| EKF 整车建模 | `tracker/target` | 车心+速度+朝向+转速+半径/高差（11 维，小陀螺） | ③ 整车小陀螺；④⑤ |
-| 跟踪状态机 | `tracker/tracker` | LOST / DETECTING / TRACKING / TEMP_LOST | ④ 单目标锁定 / 掉帧外推 |
-| 单板普通 KF（CV/CA 对比） | `tracker/simple_target` | 装甲板心：CV 6 维 / CA 9 维 | ①② 的历史实现（保留源码，可由 `simple_tracker_node` 单独启动对比） |
+| 方向 | 算法层 | 状态向量 |
+|---|---|---|
+| EKF 整车建模 | `tracker/target` | 车心+速度+朝向+转速+半径/高差（11 维，小陀螺） |
+| 跟踪状态机 | `tracker/tracker` | LOST / DETECTING / TRACKING / TEMP_LOST |
+| 单板普通 KF（CV/CA 对比） | `tracker/simple_target` | 装甲板心：CV 6 维 / CA 9 维 |
 
 数据流：
 `video_player(/image)` → `detector(/armors)` → `tracker_node(/tracker/target, /tracker/marker)`
@@ -18,6 +18,11 @@
 朝向/转速 + 半径/长短轴 + 高低差），一次锁定目标车，车上 4 块装甲板统一由车体状态推导。
 整车几何为**绕竖直轴（相机 y）在 x-z 水平面水平公转**（sp_vision 世界系"绕竖直轴转"在
 相机系下的正确表达）
+
+图像标注：
+**白色框**：整车四装甲板建模
+**绿色框**：当前追踪框
+**紫色虚线框**：预测框
 
 ## 2. 项目目录结构
 
@@ -153,7 +158,7 @@ ros2 topic echo /tracker/target --once
 | `/armor_detector/final_img` | Image | armor_detector | 标注图（debug=true） |
 | `/armor_detector/marker_array` | MarkerArray | armor_detector | 检测装甲板（3D） |
 | `/tracker/target` | Target | tracker_node | 整车状态输出：车心位置/速度/朝向/转速/半径/板数；TEMP_LOST 外推时也发，`predicted=true` |
-| `/tracker/marker` | MarkerArray | tracker_node | 整车 3D：车心球 + N 块预测装甲板 CUBE |
+| `/tracker/marker` | MarkerArray | tracker_node | 整车 3D：车心球 + N 块预测装甲板 CUBE（CUBE 板面带上倾 `plate_tilt_deg`°，法线上抬，贴合真实 RM 板） |
 | `/tracker/final_img` | Image | tracker_node | 渲染：白=整车 EKF 预测**全部**板（Kalman 模型转盘，掉帧/漏检时即外推可视化）；绿=本帧被 EKF 吃掉的实测板 NN 角点框（加粗+距离文本）；品红虚线=需求⑤ 未来外推板（当前状态确定性外推 `future_ms` 后，瞄准提前量预览）；青色十字=车心投影；左上 HUD=整车状态量 |
 | `/simple_tracker/target` | Target | simple_tracker_node | 单板普通 KF 输出：跟踪板心位置/速度（整车字段置 0）；无实测命中的掉帧帧 `predicted=true` |
 | `/simple_tracker/final_img` | Image | simple_tracker_node | 单板 KF 渲染（与整车并行）：绿=实测命中板，紫=掉帧纯预测板框，青十字=KF 板心 |
@@ -166,6 +171,9 @@ ros2 topic echo /tracker/target --once
 需求⑤ 未来外推可视化：`future_ms`（外推提前量 ms，默认 150——画"模型认为未来会转到
 哪"的品红虚线板框，瞄准提前量预览；只读外推不写进滤波/消息）、`show_future`（画未来板框
 开关，默认 true）。
+`plate_tilt_deg`（RM 装甲板**默认上倾角** deg，默认 15：板面朝上仰、顶边略后仰——实测前向板
+法线 `n_y≈−sin(上倾角)`≈−0.24。只影响板朝向/marker CUBE 朝向/绘制的板倾，板心与相位不变，
+EKF 核心不动；0 = 纯竖直板）。
 运行中动态调：`ros2 param set /tracker_node <名> <值>`。
 
 `tracker/config/simple_tracker.yaml`：`model`（CV 匀速 / CA 匀加速，需求② 对比实验主调参数）、

@@ -123,5 +123,10 @@
   `future_ms`（默认 150ms）后"模型认为车会转到哪"（瞄准提前量预览），白=现在模型转盘、
   绿=实测板，三层同画对照
 - `config/tracker.yaml` 新增 `future_ms`（提前量 ms，默认 150.0）/`show_future`（开关）
+- 整车板建模补上 RM 装甲板默认**上倾 15°**（`plate_tilt_deg`，默认 15）：板绘制/marker CUBE
+  板面绕宽轴转 −tilt 上仰（实测前向板法线 n_y≈−0.24≈−sin15° 佐证）；板心与相位不受，EKF 核心不动
+- `/tracker/final_img` 品红未来外推虚线框线宽 1→2（更醒目）
 
 ### Changed 变更
+
+- 首帧法线核对日志/注释从「前向板应 n_y≈0」改为「n_y≈−sin(plate_tilt_deg°)」——原假设被实测 n_y≈−0.24 推翻（板上倾所致，非纯竖直）
