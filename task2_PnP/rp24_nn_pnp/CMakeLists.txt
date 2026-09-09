@@ -19,10 +19,25 @@ add_executable(rp_detect
   src/solver.cpp
 )
 
+# 独立研究小工具:yaw 一维优化(yaw_study)。算法层在 yawstudy 模块,
+# yaw_study_main.cpp 只做采集/编排;与主程序共享检测/PnP 模块
+add_executable(rp_yaw_study
+  src/yaw_study_main.cpp
+  src/yawstudy.cpp
+  src/OpenvinoInfer.cpp
+  src/armor.cpp
+  src/solver.cpp
+)
+
 # 头文件在 include/（main.cpp 里 #include "OpenvinoInfer.h" 需要能找到）
 target_include_directories(rp_detect PRIVATE include)
+target_include_directories(rp_yaw_study PRIVATE include)
 
 target_link_libraries(rp_detect
+  ${OpenCV_LIBS}
+  openvino::runtime
+)
+target_link_libraries(rp_yaw_study
   ${OpenCV_LIBS}
   openvino::runtime
 )
