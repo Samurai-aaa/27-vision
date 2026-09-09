@@ -11,8 +11,8 @@
 namespace task3
 {
 
-// rm_vision 四态：DETECTING 连续匹配若干帧才转正，TRACKING 稳定跟踪，
-// TEMP_LOST 漏检期间纯预测续命（需求 1 掉帧构造发生在这里），超时才回 LOST
+// 四态：DETECTING 连续匹配若干帧才转正，TRACKING 稳定跟踪，
+// TEMP_LOST 漏检期间纯预测续命，超时才回 LOST
 enum class State
 {
   LOST,
@@ -49,6 +49,11 @@ public:
   // 最近一次命中的观测（含板朝向 rot）。TEMP_LOST 掉帧期间不回清（直到回 LOST）。
   // node 掉帧画外推板时用它保持目标真实朝向，不随整车自转相位摆动
   std::optional<ObservedArmor> last_obs;
+
+  // 当前"正在追踪"的整车模型板号（0~N-1）：绿框在跟的那块。TEMP_LOST 掉帧期间不更新，
+  // node 层据此用 EKF 整车公转外推续画"正在追踪的检测框"（橙色），与 TRACKING 的绿框
+  // 保持同一追踪对象（simple_tracker 掉帧紫框的整车版）。
+  int primary_id() const { return primary_id_; }
 
   // node 层可调参数
   int tracking_thres = 5;        // DETECTING → TRACKING 需要的连续匹配帧数

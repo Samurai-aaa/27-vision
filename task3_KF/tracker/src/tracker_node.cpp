@@ -353,7 +353,9 @@ void TrackerNode::renderAndPublish()
     return true;
   };
 
-  // ① 整车预测板（白色线条，四个装甲板的整车转盘模型）
+  // ① 整车预测板（白色细线，Kalman 模型转盘 N 块）：只要整车 target 在跟就画全部预测板
+  //    （含 TEMP_LOST：此时整圈白盘 = 整车 EKF 纯外推可视化，随公转相位绕背收窄/冒出，
+  //    能看到"整车还在转"；正在追踪的那块板看 ②' 橙框）。
   if (tracker_->target) {
     const auto xyza_list = tracker_->target->armor_xyza_list();
     for (const auto & xyza : xyza_list) {
@@ -400,7 +402,11 @@ void TrackerNode::renderAndPublish()
     }
   }
 
-  // ② 正在追踪的实测板（绿色粗框 + 距离文本）
+  // ② 正在追踪的检测框。TRACKING/DETECTING 本帧有实测命中 → 画绿色粗框（贴合实测 NN
+  //    角点 + 距离文本）。TEMP_LOST（整车一帧全丢：遮挡 / 检测空）→ 同一追踪对象没有
+  //    实测可画，改用 EKF 整车外推把"正在追踪的那块板"（primary_id）预测位置续画成
+  //    **橙色粗框**（需求① 强行绘制：掉帧时仍可见"现在该打的那块在哪"，绕车背收窄/
+  //    冒出；完全转到车背侧不可见时即不再追踪它，自然不画）。
   if (matched) {
     const ObservedArmor & mm = *tracker_->matched_armor;
     const bool has_corners = std::any_of(mm.corners_px.begin(), mm.corners_px.end(),
@@ -431,6 +437,21 @@ void TrackerNode::renderAndPublish()
                mm.xyz.norm());
       cv::putText(out, text, cv::Point(q[0].x, q[0].y - 10), cv::FONT_HERSHEY_SIMPLEX, 0.7,
                   cv::Scalar(0, 255, 0), 2);
+    }
+  } else if (tracker_->state == State::TEMP_LOST && tracker_->target) {
+    const auto xyza_list = tracker_->target->armor_xyza_list();
+    const int pid = tracker_->primary_id();
+    if (pid >= 0 && pid < static_cast<int>(xyza_list.size())) {
+      const auto & xyza = xyza_list[static_cast<size_t>(pid)];
+      cv::Point q[4];
+      if (plate_quad(xyza.head(3), xyza[3], q)) {
+        for (int k = 0; k < 4; k++)
+          cv::line(out, q[k], q[(k + 1) % 4], cv::Scalar(0, 165, 255), 2);  // 橙色粗框
+        char text[96];
+        snprintf(text, sizeof(text), "id=%s 外推", tracker_->tracked_number.c_str());
+        cv::putText(out, text, cv::Point(q[0].x, q[0].y - 10), cv::FONT_HERSHEY_SIMPLEX, 0.7,
+                    cv::Scalar(0, 165, 255), 2);
+      }
     }
   }
 

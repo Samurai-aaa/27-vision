@@ -12,7 +12,6 @@
 namespace task3 {
 
 // tracker 的观测输入：node 层从 armor_interfaces::msg::Armor 翻译而来。
-// 不 include 任何 ROS 消息/detector 头，target 层保持零 ROS 依赖。
 struct ObservedArmor {
   std::string number;     // "1"~"5" / "outpost"
   Eigen::Vector3d xyz;    // 板中心，相机系，单位 m

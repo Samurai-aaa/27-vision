@@ -191,7 +191,7 @@ std::vector<Eigen::Vector4d> Target::armor_xyza_list() const
     return list;
 }
 
-// 需求⑤ 只读未来外推。转移口径与 predict(double) 的状态矩阵 F 完全一致
+// 只读未来外推。转移口径与 predict(double) 的状态矩阵 F 完全一致
 // （位置 += 速度·τ、yaw += v_yaw·τ 并归一化；r/l/dz 在 τ 窗口内视为不变），但只
 // 作用在副本上、不写 ekf_ 与 t_——渲染层若直接插一次 predict 会推进真实状态，
 // 下一帧 predict(now) 的 dt 就把这 τ 多算一遍，滤波被污染。τ 内不建模新观测/过程
