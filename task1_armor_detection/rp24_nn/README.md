@@ -26,13 +26,18 @@ source /opt/intel/openvino_2024.6.0/setupvars.sh
 
 ### 2. 编译
 
-本目录提供 `CMakeLists.txt`（推荐），也保留了原来的 g++ 直接编译方式。
+本目录提供 `CMakeLists.txt`（推荐），也保留了原来的 g++ 直接编译方式。**以下命令都在仓库根目录执行**，先 `cd` 进本模块并加载 OpenVINO 环境：
+
+```bash
+cd task1_armor_detection/rp24_nn                # 后续命令均在本目录下运行
+source /opt/intel/openvino_2024.6.0/setupvars.sh   # 换新终端需重新 source
+```
 
 **方式一：CMake**
 
 ```bash
 cmake -S . -B build
-cmake --build build
+cmake --build build -j
 ```
 
 产物在 `build/rp_detect`。
@@ -46,25 +51,35 @@ g++ -o rp_detect main.cpp OpenvinoInfer.cpp \
     -lopenvino $(pkg-config --cflags --libs opencv4)
 ```
 
+产物在**当前目录** `./rp_detect`（方式一产物在 `build/`，两者路径不同，别混用）。
+
 > 注意：`libopenvino.so` 位于 `runtime/lib/intel64/` 子目录，`-L` 路径必须带 `intel64`，否则链接报 `找不到 -lopenvino`。修改置信度等参数后需重新编译。
 
 ### 3. 运行
 
 ```bash
-./rp_detect <输入视频路径> [detect_color] [输出视频路径]
+./build/rp_detect <输入视频路径> [detect_color] [输出视频路径]
 ```
 
 | 参数 | 说明 | 默认值 |
 | --- | --- | --- |
 | 输入视频路径 | 必填，待检测的视频文件（测试视频统一在项目顶层 `../../video_input/`） | — |
 | detect_color | 检测颜色：`0`=保留红(滤蓝)，`1`=保留蓝(滤红) | `0` |
-| 输出视频路径 | 标注结果写入该 AVI 文件 | `<输入名>_rp_out.avi` |
+| 输出视频路径 | 标注结果写入该 AVI 文件 | `<输入名>_rp_out.avi`（与输入同目录） |
+
+> **必须在 `task1_armor_detection/rp24_nn` 目录下运行**：模型路径在代码里写死为 `Model/0526.onnx`，按**当前工作目录**解析，换目录执行会报找不到模型。
+> 有 `DISPLAY` 时弹窗显示，按 **ESC** 退出；无显示环境自动只写文件。
 
 示例：
 
 ```bash
+cd task1_armor_detection/rp24_nn     # 模型路径依赖 CWD，须在本模块目录下运行
+
 # 检测红色（red.avi 为红色装甲板测试视频，位于项目顶层 ../../video_input/）
-./rp_detect ../../video_input/red.avi 0 video_output/red_out.avi
+./build/rp_detect ../../video_input/red.avi 0 video_output/red_out.avi
 # 检测蓝色（blu.avi 为蓝色装甲板测试视频）
-./rp_detect ../../video_input/blu.avi 1
+./build/rp_detect ../../video_input/blu.avi 1
+
+# 不指定输出路径：自动写到输入视频同目录 ../../video_input/<输入名>_rp_out.avi
+./build/rp_detect ../../video_input/装甲板.avi 0
 ```

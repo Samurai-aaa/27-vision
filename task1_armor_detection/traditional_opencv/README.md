@@ -33,11 +33,13 @@ traditional_opencv/
 
 ## 编译
 
-依赖：OpenCV 4（`pkg-config --cflags --libs opencv4`）。CMake 构建：
+依赖：OpenCV 4（`pkg-config --cflags --libs opencv4`）。**以下所有命令都在仓库根目录执行**，先 `cd` 进本模块：
 
 ```bash
+cd task1_armor_detection/traditional_opencv    # 后续命令均在本目录下运行
+
 cmake -S armor_detector -B armor_detector/build
-cmake --build armor_detector/build
+cmake --build armor_detector/build -j
 ```
 
 产物在 `armor_detector/build/armor_detector`。
@@ -49,18 +51,10 @@ cmake --build armor_detector/build
 程序会把**标注后的画面保存为 AVI 视频**，输出路径优先级：命令行第 3 个参数 > 配置里的 `video_output` > 自动在输入视频名后加 `_out.avi`。
 
 ```bash
-# 1. 直接运行（视频/颜色/阈值等全部用 config 里的值，输出到 config 的 video_output）
-./armor_detector/build/armor_detector
-
-# 2. 指定视频（覆盖配置里的 video_path，输出自动为 ../../video_input/xxx_out.avi）
-./armor_detector/build/armor_detector ../../video_input/red.avi
-./armor_detector/build/armor_detector ../../video_input/blu.avi
-./armor_detector/build/armor_detector ../../video_input/装甲板.avi
-
-# 3. 指定视频 + 指定配置文件
-./armor_detector/build/armor_detector ../../video_input/red.avi config/detector_params.txt
-
-# 4. 指定视频 + 配置文件 + 输出路径（任意位置，需先确保目录存在）
+# 先进入本模块目录——配置里的 config/... 、视频的 ../../video_input/... 都以它为基准；
+cd task1_armor_detection/traditional_opencv
+# 指定视频 + 配置文件 + 输出路径（任意位置；目录需存在，不存在先 mkdir -p）
+mkdir -p video_output
 ./armor_detector/build/armor_detector ../../video_input/red.avi config/detector_params.txt video_output/red_out.avi
 ```
 
@@ -71,6 +65,8 @@ cmake --build armor_detector/build
 加 `--debug` 参数（位置随意），会额外打开一张**二值化中间图窗口**，并在终端**逐帧打印**检测统计：
 
 ```bash
+cd task1_armor_detection/traditional_opencv
+
 ./armor_detector/build/armor_detector --debug
 ./armor_detector/build/armor_detector ../../video_input/red.avi --debug
 ```
@@ -101,3 +97,5 @@ frame 4: lights=2 armors=1 [SMALL conf=0.78]
 | `armor_max_angle` | `10.0` | 两灯条中心连线与水平方向最大夹角（度） |
 | `armor_max_center_height_diff` | `0.5` | 两灯条中心高度差上限（以平均灯长为单位），太大直接取消配对 |
 | `video_output` | 空（自动加 `_out.avi`） | 标注视频输出路径（相对运行时目录），空则自动生成，命令行第 3 个参数可覆盖 |
+
+> 表中"默认"列是 `config/detector_params.txt` 的**当前值**（正常运行时生效）。若配置文件缺失或路径写错，程序只打印一条警告后改用**代码内置兜底值**（`binary_thres=160`、小装甲板中心距 `0.8~3.2`、大装甲板 `3.2~5.5`、`armor_max_angle=35.0`），此时表中数值不再适用。
