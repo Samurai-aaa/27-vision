@@ -1,6 +1,7 @@
 ## 目录结构
 
-分为三个task,每个task有自己的CHANGELOG.md、README.md和video_output
+分为三个task,每个task有自己的CHANGELOG.md、README.md
+各个任务点的输出视频在各个目录的video_output里
 
 ```
 27-vision-<name>/
