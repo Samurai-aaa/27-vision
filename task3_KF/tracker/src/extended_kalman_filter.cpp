@@ -1,6 +1,7 @@
 #include "extended_kalman_filter.hpp"
 
 #include <numeric>
+#include <cmath>
 
 namespace task3 {
 ExtendedKalmanFilter::ExtendedKalmanFilter(
@@ -45,47 +46,37 @@ Eigen::VectorXd ExtendedKalmanFilter::update(
     std::function<Eigen::VectorXd(const Eigen::VectorXd &)> h,
     std::function<Eigen::VectorXd(const Eigen::VectorXd &, const Eigen::VectorXd &)> z_subtract)
 {
-    Eigen::VectorXd x_prior = x;
-    Eigen::MatrixXd K = P * H.transpose() * (H * P * H.transpose() + R).inverse();
-
-    P = (I - K * H) * P * (I - K * H).transpose() + K * R * K.transpose();
-
-    x = x_add(x, K * z_subtract(z, h(x)));
-
-    /// 卡方检验（诊断用，不影响 x/P）
-    Eigen::VectorXd residual = z_subtract(z, h(x));
-    Eigen::MatrixXd S = H * P * H.transpose() + R;
-    double nis = residual.transpose() * S.inverse() * residual;
-    double nees = (x - x_prior).transpose() * P.inverse() * (x - x_prior);
-
-    // 阈值 0.711 是自由度=4 卡方分布的 5% 下界（sp 原样，语义只对 4 维整车
-    // ypda 观测成立）。SimpleTarget 的 3 维 xyz 观测没有对应参考面，
-    // 若沿用会恒判失败 → 非 4 维观测时关闭 fail 判定，仅保留原始 nis/nees。
-    constexpr double nis_threshold = 0.711;
-    constexpr double nees_threshold = 0.711;
-    const int dim = static_cast<int>(residual.size());
-
-    const double nis_fail_now = (dim == 4 && nis > nis_threshold) ? 1.0 : 0.0;
-    const double nees_fail_now = (dim == 4 && nees > nees_threshold) ? 1.0 : 0.0;
-    if (nis_fail_now) nis_count_++;
-    if (nees_fail_now) nees_count_++;
-    total_count_++;
-    last_nis = nis;
-
-    recent_nis_failures.push_back(nis_fail_now);
+    update_accepted = false;
+    const Eigen::VectorXd residual = z_subtract(z, h(x));
+    const Eigen::MatrixXd S = H * P * H.transpose() + R;
+    if (!residual.allFinite() || !S.allFinite()) return x;
+    const Eigen::LDLT<Eigen::MatrixXd> solve(S);
+    if (solve.info() != Eigen::Success || !solve.isPositive() ||
+        (solve.vectorD().array() <= 0).any()) return x;
+    last_nis = residual.dot(solve.solve(residual));
+    data["nis"] = last_nis;
+    const bool rejected = !std::isfinite(last_nis) || last_nis > innovation_gate;
+    data["nis_fail"] = rejected ? 1.0 : 0.0;
+    recent_nis_failures.push_back(rejected ? 1 : 0);
     if (recent_nis_failures.size() > window_size) recent_nis_failures.pop_front();
-
-    int recent_failures = std::accumulate(recent_nis_failures.begin(), recent_nis_failures.end(), 0);
-    double recent_rate = static_cast<double>(recent_failures) / recent_nis_failures.size();
-
-    // 残差分量按实际观测维记录（dim>=3 时记前三，dim==4 时整车才有多余的 angle 项）
-    if (dim > 0) data["residual_yaw"] = residual[0];
-    if (dim > 1) data["residual_pitch"] = residual[1];
-    if (dim > 2) data["residual_distance"] = residual[2];
-    if (dim > 3) data["residual_angle"] = residual[3];
-    data["nis"] = nis;
-    data["nees"] = nees;
-    data["recent_nis_failures"] = recent_rate;
+    data["recent_nis_failures"] = static_cast<double>(
+      std::accumulate(recent_nis_failures.begin(), recent_nis_failures.end(), 0)) /
+      recent_nis_failures.size();
+    if (rejected) return x;
+    const Eigen::MatrixXd K = solve.solve(H * P).transpose();
+    const Eigen::VectorXd next_x = x_add(x, K * residual);
+    const Eigen::MatrixXd A = I - K * H;
+    Eigen::MatrixXd next_P = A * P * A.transpose() + K * R * K.transpose();
+    next_P = (0.5 * (next_P + next_P.transpose())).eval();
+    if (!next_x.allFinite() || !next_P.allFinite()) return x;
+    x = next_x;
+    P = next_P;
+    update_accepted = true;
+    if (residual.size() > 0) data["residual_yaw"] = residual[0];
+    if (residual.size() > 1) data["residual_pitch"] = residual[1];
+    if (residual.size() > 2) data["residual_distance"] = residual[2];
+    if (residual.size() > 3) data["residual_angle"] = residual[3];
+    // 无真值不能计算 NEES；不再将前后估计差冒充 NEES。
 
     return x;
 }

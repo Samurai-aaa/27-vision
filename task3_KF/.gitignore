@@ -5,3 +5,10 @@ log/
 
 # 一键脚本录制的验证视频（video_output/track_*.avi，可随时重生成，不入 git）
 video_output/
+
+# Python 运行/语法检查缓存
+__pycache__/
+*.py[cod]
+
+docs/
+.zcf/

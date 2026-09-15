@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <stdexcept>
 
 #include <cv_bridge/cv_bridge.h>
 #include <opencv2/imgproc.hpp>
@@ -40,14 +41,12 @@ std::string stateName(State s)
 }
 
 // 四元数 → 板朝向角 yaw = atan2(R(2,2), R(0,2))：板法线（板局部 z 轴，重建为 R.col(2)）
-// 在相机 x-z 水平面（相机 x 右、z 前）的方位角，前向可见板 ∈(-π,0)。与 target 整车
+// 在 world x-z 水平面（y 为竖直轴）的方位角，前向可见板 ∈(-π,0)。与 target 整车
 // 模型"绕竖直轴在 x-z 水平面公转"的观测口径一致。
 // 旧版 atan2(R(1,2),R(0,2)) 把法线投到相机像平面 x-y（竖直面）→ 旋转中双稳态(≈0/≈-π)
 // 不可观，已弃用。
-double armorYawFromQuat(const geometry_msgs::msg::Quaternion & q)
+double armorYawFromRotation(const Eigen::Matrix3d & R)
 {
-  Eigen::Quaterniond eq(q.w, q.x, q.y, q.z);
-  Eigen::Matrix3d R = eq.toRotationMatrix();
   return std::atan2(R(2, 2), R(0, 2));
 }
 
@@ -56,21 +55,32 @@ double armorYawFromQuat(const geometry_msgs::msg::Quaternion & q)
 TrackerNode::TrackerNode(const rclcpp::NodeOptions & options)
 : Node("tracker_node", options)
 {
+  max_reproj_error_ = declare_parameter<double>("max_reproj_error", 12.0);
   max_match_distance_ = declare_parameter<double>("max_match_distance", 0.2);
   max_match_yaw_diff_ = declare_parameter<double>("max_match_yaw_diff", 1.0);
   armor_num_ = declare_parameter<int>("armor_num", 0);       // 0 = 按车牌默认（哨兵/步兵 4 板）
   radius_init_ = declare_parameter<double>("radius_init", 0.0);  // 0 = 按车牌默认
   tracker_ = std::make_unique<Tracker>(max_match_distance_, max_match_yaw_diff_);
+  tracker_->high_confidence = declare_parameter<double>("high_confidence", 0.65);
+  tracker_->low_confidence = declare_parameter<double>("low_confidence", 0.35);
+  tracker_->min_class_margin = declare_parameter<double>("min_class_margin", 1.0);
+  tracker_->primary_switch_frames = declare_parameter<int>("primary_switch_frames", 3);
+  tracker_->max_weak_frames = declare_parameter<int>("max_weak_frames", 8);
   tracker_->tracking_thres = declare_parameter<int>("tracking_thres", 5);
-  tracker_->lost_time_thres = declare_parameter<double>("lost_time_thres", 0.3);
+  // 漏检容忍窗口：连续 N 帧无命中才回 LOST（稀疏检出/多车场景防画面反复断流）
+  tracker_->max_miss_frames = declare_parameter<int>("max_miss_frames", 15);
+  tracker_->lost_time_thres = declare_parameter<double>("lost_time_thres", 1.5);
   tracker_->armor_num_override = armor_num_;
   tracker_->radius_override = radius_init_;
 
   // 渲染用相机内参（与 detector 的 solver 标定一致，1440×1080）
-  fx_ = declare_parameter<double>("fx", 2556.2545862166521);
-  fy_ = declare_parameter<double>("fy", 2553.5331992802749);
-  cx_ = declare_parameter<double>("cx", 705.83803766013978);
-  cy_ = declare_parameter<double>("cy", 584.62889512335437);
+  fx_ = declare_parameter<double>("fx", 0.0);
+  fy_ = declare_parameter<double>("fy", 0.0);
+  cx_ = declare_parameter<double>("cx", 0.0);
+  cy_ = declare_parameter<double>("cy", 0.0);
+  if (fx_ <= 0.0 || fy_ <= 0.0) {
+    throw std::invalid_argument("camera fx/fy must be positive; check config/camera.yaml");
+  }
   armor_width_ = declare_parameter<double>("armor_width", 0.13);     // 绘制板宽（小装甲）
   armor_height_ = declare_parameter<double>("armor_height", 0.055);  // 板高
   plate_tilt_deg_ = declare_parameter<double>("plate_tilt_deg", 15.0);  // 板上倾角（deg）
@@ -79,6 +89,8 @@ TrackerNode::TrackerNode(const rclcpp::NodeOptions & options)
   // "current + future_ms 后"的预测板虚线框，作瞄准提前量预览。可运行时动态调。
   future_ms_ = declare_parameter<double>("future_ms", 150.0);        // 提前量 ms
   show_future_ = declare_parameter<bool>("show_future", true);       // 画未来板框开关
+  // LOST 兜底出图：未锁定时也发原始帧（标 LOST），保证 /tracker/final_img 全程不断流
+  publish_when_lost_ = declare_parameter<bool>("publish_when_lost", true);
 
   armors_sub_ = create_subscription<armor_interfaces::msg::Armors>(
     "/armors", rclcpp::QoS(10), [this](const armor_interfaces::msg::Armors::SharedPtr msg) {
@@ -90,15 +102,19 @@ TrackerNode::TrackerNode(const rclcpp::NodeOptions & options)
 
   // 渲染底图：缓存最近一帧 /image，把整车预测框画上去发 /tracker/final_img
   // （需求① 掉帧/漏检时"强行绘制"，用 rqt_image_view 看）
+  // /image 用 reliable：与 detector 订阅端同一份 QoS，否则 QoS 不匹配根本收不到
+  // （见 video_player_node.cpp 里对 100% 交付的说明）
+  rclcpp::QoS img_qos = rclcpp::SensorDataQoS();
+  img_qos.keep_last(20).reliable();
   image_sub_ = create_subscription<sensor_msgs::msg::Image>(
-    "/image", rclcpp::SensorDataQoS(), [this](const sensor_msgs::msg::Image::SharedPtr msg) {
+    "/image", img_qos, [this](const sensor_msgs::msg::Image::SharedPtr msg) {
       onImage(msg);
     });
-  // 渲染图用 SensorDataQoS（best-effort）：纯观看用途，宁可丢帧也绝不能因慢的
-  // rqt/viewer 反压而阻塞整车跟踪/渲染（reliable + 深度 10 会在慢消费者下写满
-  // 队列，publish 卡死 → 画面"中途冻住"）
+  // 渲染图用 reliable：与 /image、/armors 保持同一条"不丢帧"链，录制器才能录到与源视频
+  // 等长的成片（best-effort 下 4.6MB 的整帧在最后一跳仍会丢 ~1.8%）。代价与 /image 相同：
+  // 若有人用 rqt 看本话题且跟不上，会反压拖慢播放/录制——录制时请勿同时开 rqt 观看。
   final_img_pub_ =
-    create_publisher<sensor_msgs::msg::Image>("/tracker/final_img", rclcpp::SensorDataQoS());
+    create_publisher<sensor_msgs::msg::Image>("/tracker/final_img", rclcpp::QoS(30).reliable());
 
   // 掉帧外推：TEMP_LOST 时 100ms tick 一次 predict 并发布 predicted=true
   predict_timer_ = create_wall_timer(
@@ -107,17 +123,35 @@ TrackerNode::TrackerNode(const rclcpp::NodeOptions & options)
   RCLCPP_INFO(
     get_logger(),
     "TrackerNode 就绪(整车EKF): max_match_distance=%.2f max_match_yaw_diff=%.2f "
-    "armor_num=%d radius_init=%.3f",
-    max_match_distance_, max_match_yaw_diff_, armor_num_, radius_init_);
+    "armor_num=%d radius_init=%.3f max_miss_frames=%d lost_time_thres=%.2f",
+    max_match_distance_, max_match_yaw_diff_, armor_num_, radius_init_,
+    tracker_->max_miss_frames, tracker_->lost_time_thres);
 }
 
 void TrackerNode::onArmors(const armor_interfaces::msg::Armors::SharedPtr msg)
 {
+  processArmors(msg);
+}
+
+void TrackerNode::processArmors(const armor_interfaces::msg::Armors::SharedPtr msg)
+{
+  const int64_t stamp_ns = rclcpp::Time(msg->header.stamp).nanoseconds();
+  if (stamp_ns <= observation_stamp_ns_) return;  // 重复/乱序观测不回退滤波时间
+  observation_stamp_ns_ = stamp_ns;
+  last_armors_time_ = std::chrono::steady_clock::now();  // detector 供数中（onImage 兜底渲染的门闸）
+
   // 掉帧期间到达的空 /armors 也要推进状态机：predict 后进入 TEMP_LOST
   std::vector<ObservedArmor> obs;
   obs.reserve(msg->armors.size());
   for (const auto & m : msg->armors) {
     if (!trackable(m.number)) continue;
+    const Eigen::Vector3d position(m.pose.position.x, m.pose.position.y, m.pose.position.z);
+    const Eigen::Quaterniond orientation(m.pose.orientation.w, m.pose.orientation.x,
+                                        m.pose.orientation.y, m.pose.orientation.z);
+    if (!std::isfinite(m.confidence) || !std::isfinite(m.class_margin) ||
+        !position.allFinite() || position.z() < 0.1 || position.norm() > 30.0 ||
+        !orientation.coeffs().allFinite() || std::abs(orientation.norm()-1.0) > 0.01 ||
+        !std::isfinite(m.reproj_err) || m.reproj_err < 0 || m.reproj_err > max_reproj_error_) continue;
     // 首帧首个可跟踪板打一次法线三分量（板局部 z 轴在相机系的重建），供核对整车几何的
     // 关键假设：前向板应 n_z<0（法线朝相机）；板上倾 plate_tilt_deg_（RM 默认 15°）→
     // n_y≈−sin(上倾角)≈−0.26（实测约 −0.24，基本吻合，相机自身俯仰再加小量）。
@@ -133,28 +167,31 @@ void TrackerNode::onArmors(const armor_interfaces::msg::Armors::SharedPtr msg)
     }
     ObservedArmor a;
     a.number = m.number;
-    a.xyz << m.pose.position.x, m.pose.position.y, m.pose.position.z;  // 相机系 m
-    a.yaw = armorYawFromQuat(m.pose.orientation);  // 板法线在 x-z 水平面方位角（整车观测口径）
+    a.reproj_err = m.reproj_err;
+    a.confidence = m.confidence;
+    a.class_margin = m.class_margin;
+    a.color_uncertain = m.color_uncertain;
+    a.xyz = position;
     a.corners_px = m.corners_px;  // NN 四角点（detector 新版本带），画贴合框用
-    a.rot = Eigen::Quaterniond(m.pose.orientation.w, m.pose.orientation.x, m.pose.orientation.y,
-                               m.pose.orientation.z)
-              .toRotationMatrix();
+    a.rot = orientation.toRotationMatrix();
+    a.yaw = armorYawFromRotation(a.rot);
     obs.push_back(a);
   }
 
-  auto now = std::chrono::steady_clock::now();
+  // 算法层只用时间差：将采集时间映射到 time_point，不与墙钟混算。
+  const auto now = std::chrono::steady_clock::time_point(
+    std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::nanoseconds(stamp_ns)));
   if (tracker_->state == State::LOST) {
-    if (!tracker_->init(obs, now)) return;  // 无可锁目标，保持 LOST 等下一帧
+    tracker_->init(obs, now);  // 即使未锁定也发布 tracking=false，清除下游旧状态
   } else {
     tracker_->update(obs, now);
   }
 
   // 记录进入 TEMP_LOST 的时刻，供停流时 timer 判超时
   bool now_temp = tracker_->state == State::TEMP_LOST;
-  if (now_temp && !was_temp_lost_) temp_lost_since_ = now;
+  if (now_temp && !was_temp_lost_) temp_lost_since_ = last_armors_time_;
   was_temp_lost_ = now_temp;
 
-  frame_id_ = msg->header.frame_id;
   armor_interfaces::msg::Target target_msg;
   target_msg.header.stamp = msg->header.stamp;
   target_msg.header.frame_id = frame_id_;
@@ -174,34 +211,55 @@ void TrackerNode::onTimer()
 {
   // 只兜底"掉帧停流"情形：TEMP_LOST 期间持续 predict 外推，
   // 让漏检帧也能输出强制构造的整车估计（需求①）
-  if (tracker_->state != State::TEMP_LOST) return;
+  const auto idle = std::chrono::steady_clock::now() - last_armors_time_;
+  if (idle < std::chrono::milliseconds(200) || !tracker_->target) return;
+  if (tracker_->state == State::DETECTING) {
+    tracker_->reset();
+    armor_interfaces::msg::Target empty;
+    empty.header.stamp = get_clock()->now();
+    empty.header.frame_id = frame_id_;
+    target_pub_->publish(empty);
+    publishMarker(empty);
+    return;
+  }
+  if (tracker_->state != State::TEMP_LOST) {
+    tracker_->state = State::TEMP_LOST;
+    tracker_->matched_armor.reset();
+    temp_lost_since_ = last_armors_time_;
+    was_temp_lost_ = true;
+  }
 
   auto now = std::chrono::steady_clock::now();
 
   // 停流时 Tracker::update 不再被调，TEMP_LOST → LOST 的超时由这里补判
   if (now - temp_lost_since_ > std::chrono::duration<double>(tracker_->lost_time_thres)) {
-    tracker_->state = State::LOST;
-    tracker_->target.reset();  // 回 LOST：丢弃整车滤波器，等下一帧观测重新 init
-    tracker_->matched_armor.reset();
-    tracker_->last_obs.reset();
+    tracker_->reset();
     was_temp_lost_ = false;
     armor_interfaces::msg::Target target_msg;  // 清空 marker 用 tracking=false
     target_msg.tracking = false;
+    target_msg.header.stamp = get_clock()->now();
+    target_msg.header.frame_id = frame_id_;
     target_pub_->publish(target_msg);
     publishMarker(target_msg);
     RCLCPP_INFO(get_logger(), "TEMP_LOST 超时，回到 LOST");
     return;
   }
 
-  tracker_->target->predict(now);
+  // 定时输出使用副本：恢复后的观测仍从上一次采集时间推进，避免提前预测污染滤波。
+  const Target saved = *tracker_->target;
+  tracker_->target->predict(std::chrono::duration<double>(idle).count());
 
   armor_interfaces::msg::Target target_msg;
   target_msg.header.stamp = rclcpp::Clock().now();
   target_msg.header.frame_id = frame_id_;
-  fillTargetMsg(target_msg, true);
+  fillTargetMsg(target_msg, !tracker_->target->diverged());
   target_pub_->publish(target_msg);
   publishMarker(target_msg);
-  renderAndPublish();  // /armors 断流时的整车外推也要在图上画出来
+  *tracker_->target = saved;
+  // /armors 断供超过 500ms 才由 timer 补帧（detector 挂了/停流时画面不至于冻住）。
+  // 流还活着时 onArmors 每帧已经渲染过了，这里再渲染就是同一源帧出两次图——录制帧数
+  // 会多于源视频帧数，成片被拉成慢动作
+  // 停流期间仅发布预测状态，不把未来框绘制在旧采集图上。
 }
 
 void TrackerNode::fillTargetMsg(armor_interfaces::msg::Target & msg, bool tracking)
@@ -236,8 +294,12 @@ void TrackerNode::fillTargetMsg(armor_interfaces::msg::Target & msg, bool tracki
 void TrackerNode::publishMarker(const armor_interfaces::msg::Target & msg)
 {
   visualization_msgs::msg::MarkerArray arr;
+  visualization_msgs::msg::Marker clear;
+  clear.header = msg.header;
+  clear.action = visualization_msgs::msg::Marker::DELETEALL;
+  arr.markers.push_back(clear);
   if (!msg.tracking || !tracker_->target) {
-    marker_pub_->publish(arr);  // 空数组=清除
+    marker_pub_->publish(arr);
     return;
   }
 
@@ -307,12 +369,38 @@ void TrackerNode::onImage(const sensor_msgs::msg::Image::SharedPtr msg)
   latest_img_ = cv_bridge::toCvCopy(msg, "bgr8")->image;
   latest_img_header_ = msg->header;
   has_img_ = true;
+  // detector 还没开始供数时（OpenVINO 加载模型那十几秒不发 /armors）由 /image 兜底出图：
+  // 否则视频开头整段在 /tracker/final_img 上空白，而且录制器要等首帧才开始计时，首帧
+  // 晚到多久、录像就整体后移多久、源视频尾部就被截多久。
+  // 只在 /armors 断供时才走这条路——正常流里渲染统一由 onArmors 负责，两边都渲染会让
+  // 同一源帧出两次图，录制器按固定 30fps 写出来就成了慢动作。
+  if (tracker_->state == State::LOST &&
+      std::chrono::steady_clock::now() - last_armors_time_ > std::chrono::milliseconds(500)) {
+    renderAndPublish();
+  }
 }
 
 void TrackerNode::renderAndPublish()
 {
-  if (!has_img_ || tracker_->state == State::LOST) return;
-  if (tracker_->tracked_number.empty()) return;
+  if (!has_img_) return;
+
+  const auto render_stamp = rclcpp::Time(latest_img_header_.stamp).nanoseconds();
+  if (render_stamp == rendered_stamp_ns_) return;
+  rendered_stamp_ns_ = render_stamp;
+
+  // 未锁定（LOST / 从未锁上）：没有整车估计可画。旧版在这里直接 return →
+  // /tracker/final_img 整段停发：rqt 定格在最后一帧、录制器一路空等到超时、录出一段
+  // 几秒的废片（blu.avi 这类多车 + 稀疏检出场景 detector 有大量帧一块板都没有，
+  // init 无从下手，一停就是几十秒）。现在照发原始帧 + 红色 LOST 标注——只表示
+  // "此刻没锁到车"，不伪造任何跟踪框；不想这样就把 publish_when_lost 设 false。
+  if (tracker_->state == State::LOST || tracker_->tracked_number.empty()) {
+    if (!publish_when_lost_) return;
+    cv::Mat out = latest_img_.clone();
+    cv::putText(out, "LOST  no lock", cv::Point(16, 42), cv::FONT_HERSHEY_SIMPLEX, 1.1,
+                cv::Scalar(0, 0, 255), 3);
+    final_img_pub_->publish(*cv_bridge::CvImage(latest_img_header_, "bgr8", out).toImageMsg());
+    return;
+  }
 
   cv::Mat out = latest_img_.clone();
 
@@ -329,7 +417,8 @@ void TrackerNode::renderAndPublish()
   const bool matched = tracker_->matched_armor.has_value();
 
   // 相机系 3D 点 → 图像像素（z<0.02 视为跑到相机背后，返回 false 不画）
-  const auto to_px = [&](const Eigen::Vector3d & p, cv::Point & pt) -> bool {
+  const auto to_px = [&](const Eigen::Vector3d & p_tracking, cv::Point & pt) -> bool {
+    const Eigen::Vector3d p = p_tracking;
     if (p[2] < 0.02) return false;
     pt = cv::Point(cvRound(fx_ * p[0] / p[2] + cx_), cvRound(fy_ * p[1] / p[2] + cy_));
     return true;
@@ -339,7 +428,6 @@ void TrackerNode::renderAndPublish()
   // 默认上倾 15°：板面上仰、顶边略后仰，前向板法线因此带 −y 上抬分量，实测 n_y≈−0.24）。
   // 板心与相位不受倾角影响——板心仍是车心+r 圆环上的点。任一角跑到相机后则不画。
   const auto plate_quad = [&](const Eigen::Vector3d & c, double phi, cv::Point q[4]) -> bool {
-    if (c[2] < 0.05) return false;
     const double cf = std::cos(phi), sf = std::sin(phi);
     const Eigen::Vector3d t{-sf, 0, cf};
     const Eigen::Vector3d u = Eigen::AngleAxisd(-plate_tilt_deg_ * CV_PI / 180.0, t)
@@ -438,7 +526,7 @@ void TrackerNode::renderAndPublish()
       cv::putText(out, text, cv::Point(q[0].x, q[0].y - 10), cv::FONT_HERSHEY_SIMPLEX, 0.7,
                   cv::Scalar(0, 255, 0), 2);
     }
-  } else if (tracker_->state == State::TEMP_LOST && tracker_->target) {
+  } else if ((tracker_->state == State::TEMP_LOST || tracker_->state == State::TRACKING) && tracker_->target) {
     const auto xyza_list = tracker_->target->armor_xyza_list();
     const int pid = tracker_->primary_id();
     if (pid >= 0 && pid < static_cast<int>(xyza_list.size())) {
@@ -479,7 +567,7 @@ void TrackerNode::drawHud(cv::Mat & out)
   if (!tracker_->target) return;  // LOST 已早退，这里只防御
 
   // 需求④ 左上整车状态 HUD：把 Target/EKF 状态量实时可视化（Kalman 窗口）。
-  // 状态口径：pos=车心位置（相机系 m）、vel=车心速度、yaw=板 0 公转相位（法线
+  // 状态口径：pos=车心位置（world 系 m）、vel=车心速度、yaw=板 0 公转相位（法线
   // 水平方位）、r=短半径 / r2=r+l(长半径 4 板车)、N=板数、dz=id1/3 板高度偏置。
   const auto & x = tracker_->target->ekf_x();
   const Eigen::Vector3d c = tracker_->target->center();
@@ -488,7 +576,7 @@ void TrackerNode::drawHud(cv::Mat & out)
   const bool matched = tracker_->matched_armor.has_value();
 
   // 左上半透明底衬（读白字）
-  const cv::Rect hud(10, 10, 520, 235);
+  const cv::Rect hud(10, 10, 520, 267);
   cv::Mat roi = out(hud);
   cv::addWeighted(roi, 0.45, cv::Mat::zeros(roi.size(), CV_8UC3), 0.0, 30.0, roi);
 
@@ -519,6 +607,8 @@ void TrackerNode::drawHud(cv::Mat & out)
   snprintf(line, sizeof(line), "match=%s  last_id=%d  upd=%d", matched ? "Y" : "N",
            tracker_->target->last_id, tracker_->target->update_count());
   put(line, cv::Scalar(255, 255, 255));
+  snprintf(line, sizeof(line), "frame=%s", frame_id_.c_str());
+  put(line, cv::Scalar(180, 255, 180));
 }
 
 }  // namespace task3

@@ -1,6 +1,7 @@
 #ifndef TRACKER__MATH_TOOLS_HPP_
 #define TRACKER__MATH_TOOLS_HPP_
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 
@@ -12,9 +13,7 @@ namespace task3
 // 角度归一化到 (-pi, pi]
 inline double limit_rad(double a)
 {
-  while (a > M_PI) a -= 2.0 * M_PI;
-  while (a < -M_PI) a += 2.0 * M_PI;
-  return a;
+  return std::remainder(a, 2.0 * M_PI);
 }
 
 // 两个时间戳的间隔，秒（double）
@@ -24,32 +23,25 @@ inline double delta_time(
   return std::chrono::duration_cast<std::chrono::duration<double>>(t1 - t2).count();
 }
 
-// 直角坐标 → 球坐标 [方位角, 俯仰角, 距离]
+// 相机系 x右、y下、z前：水平角绕竖直 y 轴，俯仰角向下为正。
+// 这是视线角；车体板法线相位仍为 atan2(n_z,n_x)，二者基准轴不同。
 inline Eigen::Vector3d xyz2ypd(const Eigen::Vector3d & xyz)
 {
-  auto x = xyz[0], y = xyz[1], z = xyz[2];
-  auto yaw = std::atan2(y, x);
-  auto pitch = std::atan2(z, std::sqrt(x * x + y * y));
-  auto distance = std::sqrt(x * x + y * y + z * z);
-  return {yaw, pitch, distance};
+  const double x = xyz.x(), y = xyz.y(), z = xyz.z();
+  return {std::atan2(x, z), std::atan2(y, std::hypot(x, z)), xyz.norm()};
 }
 
-// xyz2ypd 对 xyz 的雅可比（3×3），链式法则里 xyz→ypd 的一段
 inline Eigen::Matrix3d xyz2ypd_jacobian(const Eigen::Vector3d & xyz)
 {
-  auto x = xyz[0], y = xyz[1], z = xyz[2];
-  auto s = x * x + y * y;          // 水平距离平方
-  auto d = x * x + y * y + z * z;  // 距离平方
-
+  const double x = xyz.x(), y = xyz.y(), z = xyz.z();
+  const double s = std::max(1e-12, x*x + z*z);
+  const double h = std::sqrt(s);
+  const double d2 = std::max(1e-12, s + y*y);
+  const double d = std::sqrt(d2);
   Eigen::Matrix3d J;
-  // clang-format off
-  //       ∂/∂x                ∂/∂y                ∂/∂z
-  J <<    -y / s,              x / s,                       0,
-    -(x * z) / ((z * z / s + 1) * std::pow(s, 1.5)),
-    -(y * z) / ((z * z / s + 1) * std::pow(s, 1.5)),
-        1 / ((z * z / s + 1) * std::pow(s, 0.5)),
-     x / std::pow(d, 0.5), y / std::pow(d, 0.5), z / std::pow(d, 0.5);
-  // clang-format on
+  J << z/s, 0, -x/s,
+       -x*y/(h*d2), h/d2, -z*y/(h*d2),
+       x/d, y/d, z/d;
   return J;
 }
 

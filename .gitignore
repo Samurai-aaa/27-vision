@@ -1,3 +1,10 @@
 # 项目共享测试视频（不入 git，压缩包提交时保留）
 video_input/
 .vscode/browse.vc.db*
+
+# colcon 构建产物（工作区在 task3_KF/ 内，它自己有同名 .gitignore；
+# 这里兜住"在仓库根误跑 colcon"留下的同名目录——里面只有自动生成的
+# setup 脚本与 build 日志，还烤死了本机绝对路径，别人 clone 后没用）
+build/
+install/
+log/

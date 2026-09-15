@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """打印源视频在 video_player 配置下"从头到尾完整播一遍"所需的墙钟秒数（一键录制收尾用）。
 
-读与 video_player 运行时同源的参数（install/detector/share/detector/config/video_player.yaml，
-源码目录回退）里的 video_path / fps，用 OpenCV 读总帧数：
+读取源码 detector/config/video_player.yaml 中的 video_path / fps，用 OpenCV 读总帧数：
     秒数 = 总帧数 / 播放fps（fps<=0 时取视频自身帧率）
 只播一遍（loop:false）时，video_player 到点自然退出，本秒数即完整一遍的录制时长下界。
 
-用法：video_full_secs.py   → stdout 打印一个浮点（秒），信息行走 stderr；失败非零退出。
+用法：video_full_secs.py          → stdout 打印一个浮点（秒）
+      video_full_secs.py --stem   → stdout 打印源视频名（不含扩展名），供输出文件命名
+信息行走 stderr；失败非零退出。
 """
 import os
 import sys
@@ -16,17 +17,16 @@ import yaml
 
 
 def find_params_file():
-    """优先取 install 下与运行时 launch 读取的同份参数；找不到再退回源码 config。"""
-    cands = []
+    """优先读源码配置；安装后的命令环境缺少源码时再读包 share 目录。"""
+    cands = [os.path.normpath(os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), '..', 'detector', 'config',
+        'video_player.yaml'))]
     try:
         from ament_index_python.packages import get_package_share_directory
         cands.append(os.path.join(
             get_package_share_directory('detector'), 'config', 'video_player.yaml'))
     except Exception:
         pass
-    cands.append(os.path.normpath(os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), '..', 'detector', 'config',
-        'video_player.yaml')))
     for c in cands:
         if c and os.path.isfile(c):
             return c
@@ -43,6 +43,11 @@ def main():
     if not os.path.isfile(path):
         print(f'源视频不存在: {path}', file=sys.stderr)
         sys.exit(1)
+    if '--stem' in sys.argv:
+        # 只取文件名（不含扩展名）给 start.sh 拼输出名：源视频名进输出名，
+        # 换视频就自动换文件，不会和别的视频的录制结果互相覆盖
+        print(os.path.splitext(os.path.basename(path))[0])
+        return
     cap = cv2.VideoCapture(path)
     if not cap.isOpened():
         print(f'打不开源视频: {path}', file=sys.stderr)

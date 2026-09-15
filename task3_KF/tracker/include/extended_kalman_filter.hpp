@@ -5,6 +5,7 @@
 #include <deque>
 #include <functional>
 #include <map>
+#include <limits>
 
 namespace task3{
 
@@ -40,7 +41,9 @@ public:
   std::map<std::string, double> data;  //卡方检验数据
   std::deque<int> recent_nis_failures{0};
   size_t window_size = 100;
-  double last_nis;
+  double last_nis = 0.0;
+  double innovation_gate = std::numeric_limits<double>::infinity();
+  bool update_accepted = false;
 
 private:
   Eigen::MatrixXd I;

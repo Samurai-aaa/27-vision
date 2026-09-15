@@ -32,6 +32,7 @@ public:
   // 板数/初始半径/初始协方差按车牌号自动选择（前哨 3 板、其余 4 板）；若 node 通过
   // armor_num_override / radius_override 给了非 0 覆盖值则优先用覆盖值（实测标定）
   bool init(const std::vector<ObservedArmor> & armors, std::chrono::steady_clock::time_point t);
+  void reset();
 
   // 非 LOST 态每帧调用：先整车预测 → 同号观测板与整车预测板集合做"位置+朝向"双阈值
   // 门控 → 命中才修正 EKF → r 限幅 → 状态机转移 → 发散保护
@@ -56,8 +57,19 @@ public:
   int primary_id() const { return primary_id_; }
 
   // node 层可调参数
-  int tracking_thres = 5;        // DETECTING → TRACKING 需要的连续匹配帧数
-  double lost_time_thres = 0.3;  // TEMP_LOST 持续超过该秒数 → LOST
+  double high_confidence = 0.65;
+  double low_confidence = 0.35;
+  double min_class_margin = 1.0;
+  int max_weak_frames = 8;
+  int primary_switch_frames = 3;
+  int tracking_thres = 5;  // DETECTING → TRACKING 需要的累计命中帧数（容忍窗口内的漏检不清零）
+  // 漏检容忍窗口：连续 max_miss_frames 帧无命中才回 LOST。多车并存 / 远距离 / 弱光下
+  // detector 会成片丢板（blu.avi 实测有板帧只占 56%，最差一段仅 9%），逐帧判定会让
+  // 目标在 LOST 上反复断流、画面时有时无。稠密检测时等价于原来的逐帧行为。
+  int max_miss_frames = 15;
+  // TEMP_LOST 持续超过该秒数 → LOST。只在 /armors 断流（update 不再被调）时兜底：
+  // 流还活着时由 max_miss_frames 按帧判定，所以这里要给得比 N 帧对应的时长宽
+  double lost_time_thres = 1.5;
   // 非 0 则覆盖按车牌号选择的板数/初始半径（0 = 走默认 O→3板/r0.2765，其余→4板/r0.2）
   int armor_num_override = 0;
   double radius_override = 0.0;
@@ -66,10 +78,13 @@ private:
   double max_match_distance_;  // 位置门控，m
   double max_match_yaw_diff_;  // 板朝向门控，rad
   int detect_count_;
+  int weak_count_ = 0;
+  int miss_count_ = 0;         // 当前连续无命中帧数：命中即清零，未命中累加（容忍窗口用）
   std::chrono::steady_clock::time_point temp_lost_time_;  // 进入 TEMP_LOST 的时刻
   // "正在追踪"的整车模型板号（0~N-1）：主命中板（绿框）的相位连续性锚点。一块板
   // 还检得到就一直是它；它转出视野后才移交给下一可见板，随旋转单调推进。
   int primary_id_ = 0;
+  int primary_miss_count_ = 0;
 };
 
 }  // namespace task3

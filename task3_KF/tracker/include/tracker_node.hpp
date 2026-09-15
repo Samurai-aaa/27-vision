@@ -24,8 +24,9 @@ public:
 
 private:
   void onArmors(const armor_interfaces::msg::Armors::SharedPtr msg);
+  void processArmors(const armor_interfaces::msg::Armors::SharedPtr msg);
 
-  // 缓存最近一帧 /image 作为渲染底图
+  // 缓存最近一帧 /image 作为渲染底图；detector 预热期间（/armors 还没来）由它兜底出图
   void onImage(const sensor_msgs::msg::Image::SharedPtr msg);
 
   // 掉帧外推定时器：TEMP_LOST 期间即使 /armors 停流，也周期推进整车预测并发布
@@ -44,7 +45,8 @@ private:
   // —— 需求① 的 2D 可视化：画被跟踪板框（rqt_image_view 看）——
   // 两层叠加：白色线=整车 EKF 预测的**全部**装甲板（Kalman 模型转盘，掉帧外推也画，
   // 即需求① 强行绘制）；绿色框=本帧真正被 EKF 吃掉的"正在追踪板"（matched_armor 的
-  // NN 角点贴合框 + 距离文本）；另画整车车心青色十字 + 左上 HUD（show_hud_）
+  // NN 角点贴合框 + 距离文本）；另画整车车心青色十字 + 左上 HUD（show_hud_）。
+  // 未锁定（LOST）时按 publish_when_lost_ 决定是发原始帧（标 LOST）还是不发
   void renderAndPublish();
 
   rclcpp::Subscription<armor_interfaces::msg::Armors>::SharedPtr armors_sub_;
@@ -66,6 +68,14 @@ private:
   cv::Mat latest_img_;
   std_msgs::msg::Header latest_img_header_;
   bool has_img_ = false;
+  int64_t observation_stamp_ns_ = -1;
+  int64_t rendered_stamp_ns_ = -1;
+  double max_reproj_error_ = 12.0;
+
+  // 最近一次收到 /armors 的时刻（默认构造 = 纪元，故首帧判定即为"超时未收到"）。
+  // onImage 靠它判断 detector 是否在供数：只有断供时才由 /image 兜底渲染，否则同一源帧
+  // 会被 onImage + onArmors 渲染两次 → 录制帧率高于源视频 → 成片变慢动作
+  std::chrono::steady_clock::time_point last_armors_time_{};
 
   // 参数
   double max_match_distance_;   // 整车门控：位置门控，m
@@ -78,6 +88,9 @@ private:
   bool show_hud_;                        // 左上 HUD 开关（需求④ 可视化）
   double future_ms_ = 150.0;             // 需求⑤ 未来外推提前量 ms（白=现在，品红虚线=未来）
   bool show_future_ = true;              // 需求⑤ 画未来板框开关（纯可视化，不进滤波/消息）
+  // LOST（含从未锁上）时也发原始帧 + LOST 标注，保证 /tracker/final_img 全程不断流。
+  // 关闭则退回旧行为：未锁定时不发布任何帧（rqt 定格、录制器空等超时）
+  bool publish_when_lost_ = true;
   bool sign_logged_ = false;             // 法线符号调试日志只打一次
 };
 

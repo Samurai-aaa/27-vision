@@ -10,8 +10,8 @@ find_package(armor_interfaces REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
-find_package(cv_bridge REQUIRED)   # 仅 tracker_node 2D 渲染用
-find_package(OpenCV REQUIRED)
+include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/consistent_opencv.cmake")   # 仅 tracker_node 2D 渲染用
+ # OpenCV already selected consistently with cv_bridge.
 find_package(Eigen3 REQUIRED)
 
 # 算法层静态库：ekf / target / simple_target / tracker 纯 C++ 不依赖 ROS
@@ -50,5 +50,15 @@ install(DIRECTORY include/ DESTINATION include)
 # 参数文件 + launch 文件随包安装（ros2 launch tracker tracker.launch.py 用）
 install(DIRECTORY config launch
   DESTINATION share/${PROJECT_NAME})
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../config/camera.yaml"
+  DESTINATION share/${PROJECT_NAME}/config)
+
+if(BUILD_TESTING)
+  enable_testing()
+  add_executable(stability_test test/stability_test.cpp)
+  target_link_libraries(stability_test tracker_core)
+  add_test(NAME stability_test COMMAND stability_test)
+
+endif()
 
 ament_package()

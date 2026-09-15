@@ -8,18 +8,11 @@
 
 namespace task3 {
 
-Solver::Solver()
-    : camera_matrix_((cv::Mat_<double>(3, 3) <<
-        2556.2545862166521, 0, 705.83803766013978,
-        0, 2553.5331992802749, 584.62889512335437,
-        0, 0, 1)),
-      dist_coeffs_() {}
-
 Solver::Solver(const cv::Mat& camera_matrix, const cv::Mat& dist_coeffs)
     : camera_matrix_(camera_matrix), dist_coeffs_(dist_coeffs) {}
 
-// solvePnPGeneric：IPPE 平面目标固定返回 2 个解（真解 + 镜像解），
-// 在其中选"板面法线朝相机 + 重投影误差最小"的那个，避免翻转退化姿态。
+// IPPE 双解：筛选正深度、外法线朝相机的候选，再比较重投影误差。
+// 两解可能均满足几何条件；此处不声称已解决姿态时序歧义。
 bool Solver::solvePnPGeneric(Armor& armor) {
     if (armor.type == ArmorType::INVALID || armor.corners.size() != 4) return false;
     const auto& model = armor.type == ArmorType::BIG ? modelBig() : modelSmall();
@@ -29,14 +22,9 @@ bool Solver::solvePnPGeneric(Armor& armor) {
                                 rvecs, tvecs, false, cv::SOLVEPNP_IPPE);
     if (n <= 0) return false;
 
-    // 选解：优先选"板面朝相机 + 重投影误差最小"的解；
-    // 若所有解都朝后（几何失配导致 IPPE 退化），回退选重投影误差最小的解，
-    // 保证上层能画出 z 轴（此时姿态可能翻转，是否可信由上层判断）。
     int best = 0;
     double best_err = DBL_MAX;
     bool have_facing = false;
-    int fallback = 0;
-    double fallback_err = DBL_MAX;
     for (int k = 0; k < n; k++) {
         cv::Mat R;
         cv::Rodrigues(rvecs[k], R);
@@ -47,16 +35,17 @@ bool Solver::solvePnPGeneric(Armor& armor) {
         for (int i = 0; i < 4; i++)
             err += cv::norm(proj[i] - armor.corners[i]);  // 像素误差
 
-        if (err < fallback_err) { fallback_err = err; fallback = k; }
-        if (R.at<double>(2, 2) <= 0) continue;  // 镜像解，板面朝后，仅作回退备选
+        // 模型局部 +z 是外法线，朝相机应与板位置方向相反；不用于区分 IPPE 双解。
+        if (!cv::checkRange(tvecs[k]) || !cv::checkRange(R) ||
+            tvecs[k].at<double>(2) <= 0 || R.col(2).dot(tvecs[k]) >= 0) continue;
         have_facing = true;
         if (err < best_err) { best_err = err; best = k; }
     }
-    if (!have_facing) best = fallback;  // 全朝后：回退最小误差解，保证有输出
+    if (!have_facing) return false;  // 几何不合法的观测不得进入跟踪器
 
     armor.rvec = rvecs[best];
     armor.tvec = tvecs[best];
-    armor.reproj_err = have_facing ? best_err : fallback_err;
+    armor.reproj_err = best_err;
     fillPoseMetrics(armor);
     return true;
 }

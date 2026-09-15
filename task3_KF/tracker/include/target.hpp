@@ -15,6 +15,11 @@ namespace task3 {
 struct ObservedArmor {
   std::string number;     // "1"~"5" / "outpost"
   Eigen::Vector3d xyz;    // 板中心，相机系，单位 m
+  double reproj_err = 0.0;
+  double confidence = 1.0;
+  double class_margin = 10.0;
+  bool color_uncertain = false;
+  double noise_scale = 1.0;
   double yaw;             // 板法线在相机 x-z 水平面的方位角 atan2(n_z,n_x)（rad），
                           //   前向可见板 ∈(-π,0)；整车绕竖直轴公转的第 id 板相位 = x[6]+id·2π/N
   // NN 四角点原图像素（TL,BL,BR,TR，x,y 交错 0..7）。算法层数据关联不用它，
@@ -46,10 +51,8 @@ public:
   void predict(std::chrono::steady_clock::time_point t);
   // 状态往前推 dt 秒（CV/CA 模型切换在此实现）
   void predict(double dt);
-  // 用一块观测修正状态（内部先做装甲板匹配）。返回该观测关联到的整车模型板号
-  // （0~N-1）。tracker 层拿它做"正在追踪板"的相位连续性锚点：绿框绑在同一块板上，
-  // 换板瞬间不再因"全局最近距离"在相邻板之间抖/回跳。
-  int update(const ObservedArmor & armor);
+  // 使用 tracker 分配的模型板号；质量或几何检查拒绝更新时返回 -1。
+  int update(const ObservedArmor & armor, int id);
 
   // 查询接口（node 层转 Target.msg / 可视化用）
   Eigen::VectorXd ekf_x() const;

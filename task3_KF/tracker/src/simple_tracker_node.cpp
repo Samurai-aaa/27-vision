@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdio>
 #include <memory>
+#include <stdexcept>
 
 #include <cv_bridge/cv_bridge.h>
 #include <opencv2/imgproc.hpp>
@@ -53,10 +54,13 @@ SimpleTrackerNode::SimpleTrackerNode(const rclcpp::NodeOptions & options)
   lost_time_thres_ = declare_parameter<double>("lost_time_thres", 0.3);
 
   // 渲染用相机内参（与 detector 的 solver 标定一致，1440×1080）
-  fx_ = declare_parameter<double>("fx", 2556.2545862166521);
-  fy_ = declare_parameter<double>("fy", 2553.5331992802749);
-  cx_ = declare_parameter<double>("cx", 705.83803766013978);
-  cy_ = declare_parameter<double>("cy", 584.62889512335437);
+  fx_ = declare_parameter<double>("fx", 0.0);
+  fy_ = declare_parameter<double>("fy", 0.0);
+  cx_ = declare_parameter<double>("cx", 0.0);
+  cy_ = declare_parameter<double>("cy", 0.0);
+  if (fx_ <= 0.0 || fy_ <= 0.0) {
+    throw std::invalid_argument("camera fx/fy must be positive; check config/camera.yaml");
+  }
   armor_width_ = declare_parameter<double>("armor_width", 0.13);
   armor_height_ = declare_parameter<double>("armor_height", 0.055);
   show_hud_ = declare_parameter<bool>("show_hud", true);
@@ -67,12 +71,15 @@ SimpleTrackerNode::SimpleTrackerNode(const rclcpp::NodeOptions & options)
     });
   target_pub_ = create_publisher<armor_interfaces::msg::Target>(
     "/simple_tracker/target", rclcpp::QoS(10));
-  // 渲染图用 SensorDataQoS（best-effort）：纯观看，绝不被慢 rqt/viewer 反压堵死
+  // 渲染图用 reliable：与 /image、/armors 同属"不丢帧"链，录制器才能录到与源视频等长
+  // 的成片。代价：用 rqt 看本话题且跟不上时会反压拖慢播放/录制，录制时勿同时开 rqt
   final_img_pub_ =
-    create_publisher<sensor_msgs::msg::Image>("/simple_tracker/final_img", rclcpp::SensorDataQoS());
+    create_publisher<sensor_msgs::msg::Image>("/simple_tracker/final_img", rclcpp::QoS(30).reliable());
 
+  // /image 必须与 video_player 发布端同为 reliable，否则 QoS 不匹配一帧都收不到
+  // （原来这里是 SensorDataQoS 即 best-effort，正是全链路丢 8% 的来源）
   image_sub_ = create_subscription<sensor_msgs::msg::Image>(
-    "/image", rclcpp::SensorDataQoS(), [this](const sensor_msgs::msg::Image::SharedPtr msg) {
+    "/image", rclcpp::QoS(20).reliable(), [this](const sensor_msgs::msg::Image::SharedPtr msg) {
       onImage(msg);
     });
 
@@ -145,7 +152,8 @@ std::vector<ObservedArmor> SimpleTrackerNode::buildObs(
   std::vector<ObservedArmor> obs;
   obs.reserve(msg->armors.size());
   for (const auto & m : msg->armors) {
-    if (!trackable(m.number)) continue;
+    if (!trackable(m.number) || m.confidence < 0.65f ||
+        m.color_uncertain || m.class_margin < 1.0f) continue;
     ObservedArmor a;
     a.number = m.number;
     a.xyz << m.pose.position.x, m.pose.position.y, m.pose.position.z;  // 相机系，m

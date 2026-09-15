@@ -63,12 +63,14 @@ Target::Target(double x, double vyaw, double radius, double h) : armor_num_(4)
 void Target::predict(std::chrono::steady_clock::time_point t)
 {
   auto dt = delta_time(t, t_);
+  if (dt <= 0.0 || !std::isfinite(dt)) return;
   predict(dt);
   t_ = t;
 }
 
 void Target::predict(double dt)
 {
+    if (!std::isfinite(dt) || dt <= 0.0) return;
     // 状态转移矩阵
     // clang-format off
     Eigen::MatrixXd F{
@@ -126,43 +128,19 @@ void Target::predict(double dt)
     ekf_.predict(F, Q, f);
 }
 
-int Target::update(const ObservedArmor & armor)
+int Target::update(const ObservedArmor & armor, int id)
 {
-    // 数据关联：观测对应的模型里的块板
-    int id = 0;
-    double min_angle_error = 1e10;
-    const std::vector<Eigen::Vector4d> xyza_list = armor_xyza_list();
-
-    std::vector<std::pair<Eigen::Vector4d, int>> xyza_i_list;
-    for (int i = 0; i < armor_num_; i++) xyza_i_list.push_back({xyza_list[i], i});
-
-    // 按预测距离升序：近板离相机近、观测质量高，优先参与匹配
-    std::sort(
-        xyza_i_list.begin(), xyza_i_list.end(),
-        [](const std::pair<Eigen::Vector4d, int> & a, const std::pair<Eigen::Vector4d, int> & b) {
-            return a.first.head(3).norm() < b.first.head(3).norm();
-        });
-
-    // 最近 3 块里选 "|Δ板法线方位角|" 最小者。新几何板只绕竖直轴公转，块间靠相位
-    // φ 区分（邻板差 2π/N），而各板同高 → 屏幕方位 atan2(y,x) 无区分度，故只比 φ。
-    int n_cand = std::min(3, armor_num_);  // 防止 2 板车（平衡步兵）越界
-    for (int i = 0; i < n_cand; i++) {
-        const auto & xyza = xyza_i_list[i].first;
-        auto angle_error = std::abs(limit_rad(armor.yaw - xyza[3]));
-        if (angle_error < min_angle_error) {
-            id = xyza_i_list[i].second;
-            min_angle_error = angle_error;
-        }
-    }
-
-    // 记录匹配结果（tracker 层和 debug 用）
-    if (id != 0) jumped = true;
-    is_switch_ = (id != last_id);
-    if (is_switch_) switch_count_++;
-    last_id = id;
-    update_count_++;
-
+    if (id < 0 || id >= armor_num_) return -1;
+    // 使用 tracker 一对一关联结果；拒绝更新时保留预测及身份。
+    const auto prior = ekf_;
     update_ypda(armor, id);
+    if (!ekf_.update_accepted) return -1;
+    if (diverged()) { ekf_ = prior; return -1; }
+    jumped = id != 0;
+    is_switch_ = id != last_id;
+    if (is_switch_) ++switch_count_;
+    last_id = id;
+    ++update_count_;
     return id;
 }
 
@@ -215,9 +193,12 @@ std::vector<Eigen::Vector4d> Target::armor_xyza_list_at(double tau) const
 
 bool Target::diverged() const
 {
-    auto r_ok = ekf_.x[8] > 0.05 && ekf_.x[8] < 0.5;
-    auto l_ok = ekf_.x[8] + ekf_.x[9] > 0.05 && ekf_.x[8] + ekf_.x[9] < 0.5;
-    return !(r_ok && l_ok);
+    const auto & x = ekf_.x;
+    if (!x.allFinite() || !ekf_.P.allFinite()) return true;
+    return x[8] < 0.12 || x[8] > 0.4 || x[8]+x[9] < 0.12 || x[8]+x[9] > 0.4 ||
+           std::abs(x[10]) > 0.15 || center().norm() > 30.0 ||
+           velocity().norm() > 15.0 || std::abs(x[7]) > 30.0;
+
 }
 
 bool Target::convergened()
@@ -267,6 +248,9 @@ void Target::update_ypda(const ObservedArmor & armor, int id)
 
     Eigen::VectorXd z{{ypd_obs[0], ypd_obs[1], ypd_obs[2], armor.yaw}};
 
+    // 四维创新门控（保守起点）；质量差的角点降低更新权重。
+    R *= armor.noise_scale * (1.0 + std::pow(armor.reproj_err / 4.0, 2));
+    ekf_.innovation_gate = 18.47;
     ekf_.update(z, H, R, h, z_subtract);
 }
 

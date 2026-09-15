@@ -17,6 +17,7 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     pkg_share = get_package_share_directory('tracker')
+    camera_params = os.path.join(pkg_share, 'config', 'camera.yaml')
     params_file = os.path.join(pkg_share, 'config', 'simple_tracker.yaml')
     with open(params_file) as f:
         st = yaml.safe_load(f)['simple_tracker_node']['ros__parameters']
@@ -30,6 +31,6 @@ def generate_launch_description():
             executable='simple_tracker_node',
             name='simple_tracker_node',
             output='screen',
-            parameters=[params_file, {'model': LaunchConfiguration('model')}],
+            parameters=[camera_params, params_file, {'model': LaunchConfiguration('model')}],
         ),
     ])

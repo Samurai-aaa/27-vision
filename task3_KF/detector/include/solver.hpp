@@ -10,7 +10,6 @@ namespace task3 {
 
 class Solver {
 public:
-    Solver();   // 默认用真实相机内参（1440x1080 标定值）
     Solver(const cv::Mat& camera_matrix, const cv::Mat& dist_coeffs = cv::Mat());
 
     // 显式用 solvePnPGeneric：在 IPPE 双解中选"板面朝相机 + 重投影误差最小"的解

@@ -20,6 +20,8 @@ struct Object
     float landmarks[8]; //4个关键点
     int label;
     float prob;
+    float class_margin = 0.0f;
+    bool color_uncertain = false;
     int color;      //blue:1 , red:0
     double length;
     double width;
@@ -32,6 +34,8 @@ public:
     const int IMAGE_HEIGHT = 640;
     const int IMAGE_WIDTH = 640;
     double ans;
+    float conf_threshold = 0.35f;
+    float nms_threshold = 0.45f;
     vector<double> ious;
     vector<Object> tmp_objects;
     std::shared_ptr<ov::Model> model;

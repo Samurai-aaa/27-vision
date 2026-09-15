@@ -7,14 +7,14 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
-find_package(cv_bridge REQUIRED)
+include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/consistent_opencv.cmake")
 find_package(armor_interfaces REQUIRED)
 find_package(ament_index_cpp REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(rcl_interfaces REQUIRED)
 
 # OpenCV（cv_bridge 自带，但节点直接用也显式找）
-find_package(OpenCV REQUIRED)
+ # OpenCV already selected consistently with cv_bridge.
 # OpenVINO：编译前需先加载环境变量：
 #   source /opt/intel/openvino_2024.6.0/setupvars.sh
 find_package(OpenVINO REQUIRED)
@@ -49,5 +49,7 @@ install(DIRECTORY Model DESTINATION share/${PROJECT_NAME})
 
 # config（参数 yaml）+ launch 文件随包安装：launch 用 get_package_share_directory 定位 config
 install(DIRECTORY config launch DESTINATION share/${PROJECT_NAME})
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../config/camera.yaml"
+  DESTINATION share/${PROJECT_NAME}/config)
 
 ament_package()

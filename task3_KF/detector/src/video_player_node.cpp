@@ -41,10 +41,26 @@ public:
         RCLCPP_INFO(this->get_logger(), "Playing %s @ %.1f fps (loop=%s)",
                     video_path_.c_str(), fps_, loop_ ? "true" : "false");
 
-        // SensorDataQoS：与 detector 订阅端一致，推理跟不上时自然丢帧（正好测 KF 掉帧逻辑）
-        img_pub_ = create_publisher<sensor_msgs::msg::Image>("/image", rclcpp::SensorDataQoS());
+        // /image 用 reliable —— 这是整条链路上唯一能保证"一帧不丢"的开关。
+        // 实测（blu.avi，3301 帧 @30Hz，1440x1080x3 = 4.6MB/帧）：
+        //   best-effort 下被动订阅者只收到 ~3020 帧（丢 8%），detector 实际只拿到 27.5Hz，
+        //   /armors、渲染、录像全部按这个缩水的帧率走 → 成片比源视频短 8%。
+        //   丢帧既不来自算力（detector 单帧回调仅 9.7ms，只占 33ms 周期的 29%），
+        //   也不来自队列深度（depth 5→60 无变化），更不是内核丢包（UDP 的 RcvbufErrors
+        //   全程为 0，4.6MB 走的是 Fast DDS 共享内存通道）—— 是 best-effort 语义本身：
+        //   读端只要瞬时落后，整帧就被丢弃。改 reliable 后实测 3301/3301 全收到，
+        //   发布端仍是 30.00Hz（没有被反压拖慢）。
+        // 代价：reliable 写端在历史写满时会阻塞 publish，所以**用 rqt 看 /image 且跟不上
+        // 会反压拖慢整个播放**。链路自身的消费者（detector/tracker 回调都在 10ms 量级）
+        // 不存在这个问题；纯观看请看 /tracker/final_img（仍是 best-effort，慢 viewer
+        // 不会波及算法链）。
+        rclcpp::QoS img_qos(rclcpp::KeepLast(20));
+        img_qos.reliable().durability_volatile();
+        img_pub_ = create_publisher<sensor_msgs::msg::Image>("/image", img_qos);
 
-        auto period = std::chrono::milliseconds(static_cast<int>(1000.0 / fps_));
+        // 周期用纳秒精度：原来 (int)(1000.0/30.0) = 33ms，实际按 30.30fps 播，比源视频快 1%
+        // （3301 帧的片子 108.96s 就播完，而不是 110.03s），录出来的时长也跟着偏短
+        auto period = std::chrono::nanoseconds(static_cast<int64_t>(1e9 / fps_));
         timer_ = create_wall_timer(period, std::bind(&VideoPlayerNode::timerCallback, this));
     }
 

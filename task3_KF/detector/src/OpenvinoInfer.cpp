@@ -1,4 +1,6 @@
 #include "OpenvinoInfer.h"
+#include <limits>
+#include <cmath>
 
 namespace task3 {
 
@@ -53,8 +55,7 @@ void OpenvinoInfer::infer(Mat img, int detect_color){
 //        std::cout << "The shape of output tensor:"<<output_shape << std::endl;
     // 25200 x 85 Matrix
     cv::Mat output_buffer(output_shape[1], output_shape[2], CV_32F, output.data());
-    float conf_threshold = 0.65 ;
-    float nms_threshold = 0.45;
+    // 阈值由 detector 参数传入；NMS 与初筛使用相同目标分数。
     std::vector<cv::Rect> boxes;
     std::vector<int> class_ids;
     std::vector<float> class_scores;
@@ -81,10 +82,10 @@ void OpenvinoInfer::infer(Mat img, int detect_color){
         // class score: 0~3
     //    cout<<"class_id.x:"<<class_id.x<<endl;
     //    cout<<"detect_color:"<<detect_color<<endl;
-        // None 或者Purple 丢掉
+        // None/Purple 保留为颜色不确定的弱候选
         if(color_id.x == 2 || color_id.x == 3)
         {
-            continue;
+            // 未知颜色仅作为弱候选下发，tracker 禁止用它建轨。
         }
         // 模型 color 输出: 0=蓝 1=红（实测 red.avi 装甲板输出 1，原代码约定相反）
         else if(detect_color == 0 && color_id.x == 0)   // 保留红: 滤蓝(0)
@@ -99,6 +100,11 @@ void OpenvinoInfer::infer(Mat img, int detect_color){
         _color_id = color_id.x;
         Object obj;
         obj.prob = confidence;
+        obj.color_uncertain = color_id.x == 2 || color_id.x == 3;
+        float second_score = -std::numeric_limits<float>::infinity();
+        for (int k = 0; k < classes_scores.cols; ++k)
+          if (k != class_id.x) second_score = std::max(second_score, classes_scores.at<float>(0,k));
+        obj.class_margin = static_cast<float>(score_num) - second_score;
         obj.color = _color_id;
         obj.label = _class_id;
         obj.landmarks[0]=output_buffer.at<float>(i, 0);
@@ -113,6 +119,7 @@ void OpenvinoInfer::infer(Mat img, int detect_color){
         // length = 顶边 TL→TR = 装甲板宽;  width = 左边 TL→BL = 灯条高
         obj.length = cv::norm(cv::Point2f(obj.landmarks[6] - obj.landmarks[0], obj.landmarks[7] - obj.landmarks[1]));
         obj.width  = cv::norm(cv::Point2f(obj.landmarks[2] - obj.landmarks[0], obj.landmarks[3] - obj.landmarks[1]));
+        if (!std::isfinite(obj.length) || !std::isfinite(obj.width) || obj.width < 1.0) continue;
         obj.ratio = obj.length / obj.width;
 
         std::vector<cv::Point2f> points;
@@ -145,7 +152,7 @@ void OpenvinoInfer::infer(Mat img, int detect_color){
         obj.rect = rect;
         objects.push_back(obj);
         boxes.push_back(rect);
-        confidences.push_back(score_num);
+        confidences.push_back(confidence);
     }
     // NMS
 //        std::cout<<"object_size: "<<objects.size()<<endl;
@@ -153,7 +160,7 @@ void OpenvinoInfer::infer(Mat img, int detect_color){
     cv::dnn::NMSBoxes(boxes, confidences, conf_threshold, nms_threshold, indices);
     int index = 0, index_indices = 0;
     for(int valid_index:indices){
-        if(valid_index <= objects.size()){
+        if(valid_index >= 0 && static_cast<size_t>(valid_index) < objects.size()){
             tmp_objects.push_back(objects[valid_index]);
         }
     }

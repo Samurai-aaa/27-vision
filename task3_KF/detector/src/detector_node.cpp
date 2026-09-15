@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <map>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -28,8 +29,22 @@ DetectorNode::DetectorNode(const rclcpp::NodeOptions & options)
 
     detect_color_ = declare_parameter<int>("detect_color", 0);
 
-    infer_  = initInfer();
-    solver_ = std::make_unique<Solver>();
+    const double fx = declare_parameter<double>("fx", 0.0);
+    const double fy = declare_parameter<double>("fy", 0.0);
+    const double cx = declare_parameter<double>("cx", 0.0);
+    const double cy = declare_parameter<double>("cy", 0.0);
+    if (fx <= 0.0 || fy <= 0.0) {
+        throw std::invalid_argument("camera fx/fy must be positive; check config/camera.yaml");
+    }
+    const cv::Mat camera_matrix = (cv::Mat_<double>(3, 3) <<
+        fx, 0.0, cx,
+        0.0, fy, cy,
+        0.0, 0.0, 1.0);
+
+    infer_ = initInfer();
+    infer_->conf_threshold = declare_parameter<double>("confidence_threshold", 0.35);
+    infer_->nms_threshold = declare_parameter<double>("nms_threshold", 0.45);
+    solver_ = std::make_unique<Solver>(camera_matrix);
 
     // debug 开关 + 运行中切换
     bool debug = declare_parameter<bool>("debug", true);
@@ -48,14 +63,32 @@ DetectorNode::DetectorNode(const rclcpp::NodeOptions & options)
 
     armors_pub_ = create_publisher<armor_interfaces::msg::Armors>("/armors", 10);
     marker_pub_ = create_publisher<visualization_msgs::msg::MarkerArray>("/armor_detector/marker_array", 10);
+    // /image 必须与 video_player 发布端同为 reliable，否则 QoS 不匹配收不到帧。
+    // 原来这里是 SensorDataQoS（best-effort），正是全链路丢 8% 的来源，详见
+    // video_player_node.cpp 里的实测说明。depth 20 ≈ 0.67s 的历史，足够吸收调度抖动。
+    rclcpp::QoS img_qos = rclcpp::SensorDataQoS();
+    img_qos.keep_last(20).reliable();
     img_sub_ = create_subscription<sensor_msgs::msg::Image>(
-        "/image", rclcpp::SensorDataQoS(),
+        "/image", img_qos,
         std::bind(&DetectorNode::imageCallback, this, std::placeholders::_1));
 
 };
 
 void DetectorNode::imageCallback(const sensor_msgs::msg::Image::ConstSharedPtr img_msg) {
-    cv::Mat frame = cv_bridge::toCvCopy(img_msg, "bgr8")->image;
+    // 零拷贝取图：原实现 toCvCopy 会把整帧（1440x1080x3 = 4.6MB）memcpy 一遍，紧接着又
+    // resize 到 640 丢给模型——这次拷贝对推理没有任何贡献。这里改为在消息缓冲区上直接建
+    // 只读视图。注：本回调实测只占 9.7ms（推理 9.1 + resize 0.6），不是瓶颈（链路丢帧的
+    // 真因是 best-effort QoS，见 video_player_node.cpp）；省掉这 4.6MB 拷贝只是去掉
+    // 每秒 140MB 的无谓搬运，不是"修好了丢帧"。
+    // 只在编码/步长不是紧凑 bgr8 时回退到 toCvCopy（保持原语义）。
+    cv::Mat frame;
+    if (img_msg->encoding == "bgr8" &&
+        img_msg->step == static_cast<uint32_t>(img_msg->width) * 3u) {
+        frame = cv::Mat(static_cast<int>(img_msg->height), static_cast<int>(img_msg->width),
+                        CV_8UC3, const_cast<unsigned char *>(img_msg->data.data()));
+    } else {
+        frame = cv_bridge::toCvCopy(img_msg, "bgr8")->image;
+    }
     if (frame.empty()) return;
 
     cv::Mat img640;
@@ -77,6 +110,9 @@ void DetectorNode::imageCallback(const sensor_msgs::msg::Image::ConstSharedPtr i
         armors.push_back(a);
 
         armor_interfaces::msg::Armor m;
+        m.confidence = obj.prob;
+        m.class_margin = obj.class_margin;
+        m.color_uncertain = obj.color_uncertain;
         m.number = (a.label >= 0 && a.label < 9) ? kLabels[a.label] : "?";
         m.type = (a.type == ArmorType::BIG) ? "big" : "small";
         m.distance_to_image_center =
@@ -102,27 +138,29 @@ void DetectorNode::imageCallback(const sensor_msgs::msg::Image::ConstSharedPtr i
 
     // debug 标注图：四点框 + 角点 + 类别/置信度 + 距离/yaw/重投影误差 + z 轴
     if (final_img_pub_) {
+        // frame 现在可能是消息缓冲区的只读视图，标注要画在自己的副本上
+        cv::Mat canvas = frame.clone();
         for (const Armor & a : armors) {
             cv::Scalar c = (a.color == 1) ? cv::Scalar(0, 0, 255) : cv::Scalar(255, 0, 0);  // 1=红 0=蓝
             for (int k = 0; k < 4; k++)
-                cv::line(frame, a.corners[k], a.corners[(k + 1) % 4], c, 2);
-            for (const auto & p : a.corners) cv::circle(frame, p, 3, c, -1);
+                cv::line(canvas, a.corners[k], a.corners[(k + 1) % 4], c, 2);
+            for (const auto & p : a.corners) cv::circle(canvas, p, 3, c, -1);
 
             const char * label = (a.label >= 0 && a.label < 9) ? kLabels[a.label] : "?";
             char text[64];
             snprintf(text, sizeof(text), "%s %.2f", label, a.prob);
-            cv::putText(frame, text, cv::Point2f(a.corners[0].x, a.corners[0].y - 8),
+            cv::putText(canvas, text, cv::Point2f(a.corners[0].x, a.corners[0].y - 8),
                         cv::FONT_HERSHEY_SIMPLEX, 0.7, c, 2);
 
             char txt[64];
             snprintf(txt, sizeof(txt), "%.2fm yaw=%.1f err=%.0f",
                      a.distance, a.yaw, a.reproj_err);
-            cv::putText(frame, txt, cv::Point2f(a.corners[0].x, a.corners[0].y - 28),
+            cv::putText(canvas, txt, cv::Point2f(a.corners[0].x, a.corners[0].y - 28),
                         cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 255, 255), 2);
 
-            solver_->drawZAxis(frame, a);
+            solver_->drawZAxis(canvas, a);
         }
-        final_img_pub_->publish(*cv_bridge::CvImage(armors_msg_.header, "bgr8", frame).toImageMsg());
+        final_img_pub_->publish(*cv_bridge::CvImage(armors_msg_.header, "bgr8", canvas).toImageMsg());
     }
 };
 
