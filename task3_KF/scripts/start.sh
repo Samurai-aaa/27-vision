@@ -3,8 +3,9 @@
 # 播一遍"的渲染录成 avi，播完自动停全部节点。不再分手动/自动、不用手传秒数——完整一遍
 # 时长自动算。选哪条追踪链路由第一个参数决定：
 #
-#   ./scripts/start.sh             整车 EKF（tracker_node）      → video_output/track_ekf_<视频>.avi
+#   ./scripts/start.sh             整车 EKF（tracker_node），默认不录制
 #   ./scripts/start.sh ekf         同上（显式）
+#   ./scripts/start.sh --no-record 只启动节点，不录制（默认）；--record 显式开启录制
 #   ./scripts/start.sh kf [CV|CA]  单板普通 KF（simple_tracker_node）
 #                                    model 空 = 用 config 默认(CV) → track_kf_<视频>.avi
 #                                    model CV/CA                  → track_kf_CV_<视频>.avi / track_kf_CA_<视频>.avi
@@ -29,8 +30,26 @@
 set -o pipefail
 # 参数最先抓（openvino 的 setupvars.sh 会消费位置参数，source 后 $1 会变空）；
 # 不能在 source ament setup 前 set -u，humble setup.bash 会读未绑定变量。
-sel="${1:-ekf}"          # ekf | kf
-model="${2:-}"           # kf 时可选 CV | CA（空则用 config 默认，yaml 现为 CV）
+usage() {
+  echo "用法：$0 [ekf | kf [CV|CA]] [--record | --no-record]"
+  echo "默认：整车 EKF，不录制。--record 开启录制；播完停止，loop:true 时 Ctrl+C 停止。"
+}
+record=false
+args=()
+for arg in "$@"; do
+  case "$arg" in
+    --record) record=true ;;
+    --no-record) record=false ;;
+    -h|--help) usage; exit 0 ;;
+    --*) echo "未知选项：$arg" >&2; usage; exit 2 ;;
+    *) args+=("$arg") ;;
+  esac
+done
+sel="${args[0]:-ekf}"     # ekf | kf
+model="${args[1]:-}"      # kf 时可选 CV | CA
+if [ "${#args[@]}" -gt 2 ] || { [ "$sel" = ekf ] && [ -n "$model" ]; }; then
+  usage; exit 2
+fi
 case "$sel" in
   ekf)
     TRACK="tracker tracker.launch.py"             # 整车 EKF 链路
@@ -67,7 +86,8 @@ source "$WS/install/setup.bash"
 source /opt/intel/openvino_2024.6.0/setupvars.sh >/dev/null 2>&1 || true
 set -u
 
-OUT="$WS/video_output"; LOG="$WS/log"; mkdir -p "$OUT" "$LOG"
+OUT="$WS/video_output"; LOG="$WS/log"; mkdir -p "$LOG"
+if [ "$record" = true ]; then mkdir -p "$OUT"; fi
 
 # 只写括号形式，避免 pkill 匹配到进程自身的命令行而自杀
 # 注：[t]racker_node 同时覆盖 simple_tracker_node（两者命令行都含 tracker_node 子串）
@@ -92,8 +112,12 @@ OUT_AVI_PATH="$OUT/$OUT_AVI"
 # 录制窗口多留几秒：录制器起点比 video_player 首帧略晚，多加余量保证录到 EOF；
 # loop:false 播完即停，末尾超出的窗口只是空等，不会产生多余帧。
 REC_SECS="$(python3 -c "print(round($FULL_SECS + 6, 1))")"
-echo ">> [$LABEL] 源视频完整播一遍约 ${FULL_SECS}s，录制窗口 ${REC_SECS}s"
-echo ">> 输出文件：$OUT_AVI_PATH"
+if [ "$record" = true ]; then
+  echo ">> [$LABEL] 源视频完整播一遍约 ${FULL_SECS}s，录制窗口 ${REC_SECS}s"
+  echo ">> 输出文件：$OUT_AVI_PATH"
+else
+  echo ">> [$LABEL] 不录制，源视频完整播一遍约 ${FULL_SECS}s"
+fi
 
 echo ">> 启动 detector / $LABEL（日志：task3_KF/log/*.log）"
 ros2 launch detector detector.launch.py         > "$LOG/detector.log"     2>&1 &
@@ -117,13 +141,22 @@ echo ">> 等待 detector 预热（OpenVINO 加载模型）与 $LABEL 就绪 ..."
 wait_topic /armors Publisher
 wait_topic "$REC_TOPIC" Publisher
 
-echo ">> 开始把 $REC_TOPIC 录成 $OUT_AVI_PATH（播完自动停）"
-python3 "$WS/scripts/record_video.py" "$OUT_AVI_PATH" "$REC_SECS" "$REC_TOPIC" &
-REC_PID=$!
-wait_topic "$REC_TOPIC" Subscription    # 录制器订上了才开播，否则开头几帧没人接
+if [ "$record" = true ]; then
+  echo ">> 开始把 $REC_TOPIC 录成 $OUT_AVI_PATH（播完自动停）"
+  python3 "$WS/scripts/record_video.py" "$OUT_AVI_PATH" "$REC_SECS" "$REC_TOPIC" &
+  REC_PID=$!
+  wait_topic "$REC_TOPIC" Subscription    # 录制器订上了才开播，否则开头几帧没人接
+fi
 
 echo ">> 开播：$VIDEO_STEM（video_player）"
 ros2 launch detector video_player.launch.py     > "$LOG/video_player.log" 2>&1 &
+PLAYER_PID=$!
+if [ "$record" = false ]; then
+  wait "$PLAYER_PID"
+  rc=$?
+  echo ">> 播放结束，收尾停止节点（未录制）"
+  exit "$rc"
+fi
 wait "$REC_PID"
 rc=$?
 if [ "$rc" -ne 0 ]; then

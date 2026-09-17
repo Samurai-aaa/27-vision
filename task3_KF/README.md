@@ -69,14 +69,21 @@ task3_KF/
 
 `scripts/start.sh` 自动 source 环境、起 video_player + detector + 一条追踪链路，把源视频
 **从头到尾完整播一遍**的渲染录成 avi，播完自动停止全部节点——不再分手动/自动、不用自己
-记时长或传秒数。日志写 `log/*.log`。默认录**整车 EKF**；要录**单板普通 KF**
+记时长或传秒数。日志写 `log/*.log`。默认启动**整车 EKF，不录制**；加 `--record` 开启录制。
 
 ```bash
 cd ~/Workspaces/27-vision-dev/task3_KF
-./scripts/start.sh            # 整车 EKF → video_output/track_ekf_<视频>.avi（播完自动停）
-./scripts/start.sh kf         # 单板普通 KF（model 用 config 默认 CV）→ video_output/track_kf_<视频>.avi
-./scripts/start.sh kf CA      # 单板 KF 匀加速模型 → video_output/track_kf_CA_<视频>.avi
+./scripts/start.sh            # 整车 EKF，不录制（播完自动停）
+./scripts/start.sh kf --record # 单板普通 KF（model 用 config 默认 CV）→ video_output/track_kf_<视频>.avi
+./scripts/start.sh kf CA --record # 单板 KF 匀加速模型 → video_output/track_kf_CA_<视频>.avi
+./scripts/start.sh ekf --no-record   # 整车 EKF，只播放和追踪，不录制
+./scripts/start.sh kf CV --no-record # 单板 CV，只播放和追踪，不录制
+./scripts/start.sh ekf --record      # 显式开启录制
+./scripts/start.sh --help            # 查看命令行选项
 ```
+
+`--record` / `--no-record` 可放在链路参数前后。不录制时不会启动录制器或等待其订阅，
+源视频播完后自动停止节点；配置 `loop: true` 时持续播放，按 Ctrl+C 停止。
 
 输出名 = `track_<链路>[_<model>]_<源视频>.avi`，`<源视频>` 取自 `video_path` 的文件名
 （`video_path: .../red.avi` → `track_ekf_red.avi`）。所以**同链路 + 同模型 + 同视频**

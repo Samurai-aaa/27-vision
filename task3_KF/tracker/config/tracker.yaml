@@ -5,7 +5,10 @@ tracker_node:
     high_confidence: 0.65       # 建轨/可靠同号命中
     low_confidence: 0.35        # 弱候选，仅已确认轨迹可用
     min_class_margin: 1.0      # 原始类别 top1-top2 分差，不是概率
-    primary_switch_frames: 3  # 主板连续缺失达到此帧数才移交绿框
+    # sp_vision 主板选择：普通运动在正面 ±60° 内保持锁定；高速旋转使用进入/离开窗口。
+    aim_coming_angle_deg: 60.0
+    aim_leaving_angle_deg: 20.0
+    aim_spin_speed: 2.0       # 高速旋转分界，rad/s
     max_weak_frames: 8         # 无可靠命中时最多允许的弱续跟帧窗口
     max_reproj_error: 12.0    # 四角点重投影误差之和上限，px；待视频标定
     max_match_distance: 0.2    # 观测板心与整车预测板心的最大位置差，m
@@ -18,12 +21,9 @@ tracker_node:
 
     # —— 状态机 ——
     tracking_thres: 5      # DETECTING → TRACKING 需要的**累计**命中帧数（容忍窗口内的漏检不清零）
-    # 漏检容忍窗口：连续 max_miss_frames 帧无命中才回 LOST。多车并存 / 远距离 / 弱光下
-    # detector 会成片丢板（blu.avi 实测有板帧只占 56%，最差一段仅 9%），逐帧判定会让
-    # 目标在 LOST 上反复断流、画面时有时无。设 1 即退回"一漏就回 LOST"的旧行为。
-    max_miss_frames: 15
-    # TEMP_LOST 持续超过该秒数 → LOST。只在 /armors 断流（update 不再被调）时兜底：
-    # 流还活着时由 max_miss_frames 按帧判定，所以这里给得比 N 帧对应的时长宽
+    # 暂时遮挡时保留整车并预测；连续漏检帧数或 TEMP_LOST 时长超过上限则失锁。
+    # 30 fps 下先到 1.5 秒时间上限，帧数上限保留为 120。
+    max_miss_frames: 120
     lost_time_thres: 1.5
 
     # LOST（含从未锁上）时是否也发原始帧 + LOST 标注到 /tracker/final_img。

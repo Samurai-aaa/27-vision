@@ -37,8 +37,9 @@ int main() {
     check(tracker.target->update_count()==before+1,"duplicate observation single update");
   }
   check(tracker.state==State::TRACKING,"track confirmed");
-  for(int i=0;i<10;++i) {t+=std::chrono::milliseconds(33);tracker.update({},t);}
+  for(int i=0;i<30;++i) {t+=std::chrono::milliseconds(33);tracker.update({},t);}
   check(tracker.state==State::TEMP_LOST && !tracker.target->diverged(),"occlusion coast");
+  check(tracker.tracked_number=="3", "one second occlusion preserves vehicle identity");
   t+=std::chrono::milliseconds(33);tracker.update({a},t);
   check(tracker.state==State::TRACKING,"occlusion recovery");
   const auto previous=tracker.target->ekf_x();
@@ -85,18 +86,46 @@ int main() {
   count=weak_track.target->update_count();t+=std::chrono::milliseconds(33);weak_track.update({weak},t);
   check(weak_track.target->update_count()==count,"confident wrong label rejected");
   weak=a;weak.confidence=.45;
-  for(int i=0;i<40 && weak_track.target;++i){t+=std::chrono::milliseconds(33);weak_track.update({weak},t);}
+  for(int i=0;i<140 && weak_track.target;++i){t+=std::chrono::milliseconds(33);weak_track.update({weak},t);}
   check(weak_track.state==State::LOST,"weak candidates cannot coast forever");
   Tracker handoff(.2,1.0);handoff.radius_override=.31;handoff.init({a},t);
   for(int i=0;i<7;++i){t+=std::chrono::milliseconds(33);handoff.update({a},t);}
-  ObservedArmor side=a;
-  const auto xyza=handoff.target->armor_xyza_list()[1];side.xyz=xyza.head<3>();side.yaw=xyza[3];
-  for(int i=0;i<2;++i){t+=std::chrono::milliseconds(33);handoff.update({side},t);}
-  check(handoff.primary_id()==0 && handoff.state==State::TRACKING,"short primary disappearance does not switch");
-  t+=std::chrono::milliseconds(33);handoff.update({a,side},t);
-  check(handoff.primary_id()==0 && handoff.matched_armor.has_value(),"primary recovered without jump");
-  for(int i=0;i<3;++i){t+=std::chrono::milliseconds(33);handoff.update({side},t);}
-  check(handoff.primary_id()==1,"persistent disappearance hands off");
+  // 同时间戳隔离选板逻辑：零预测时间、零观测残差，显式控制模型相位和转速。
+  auto select = [&](double angle_deg, double speed, std::initializer_list<int> ids) {
+    auto x=handoff.target->ekf_x();
+    x[0]=0; x[1]=0; x[2]=0; x[3]=0; x[4]=3.31; x[5]=0;
+    x[6]=-M_PI/2+angle_deg*M_PI/180; x[7]=speed;
+    x[8]=.31; x[9]=0; x[10]=0;
+    handoff.target->set_x(x);
+    const auto plates=handoff.target->armor_xyza_list();
+    std::vector<ObservedArmor> observations;
+    for(int id:ids) {
+      auto obs=a;obs.xyz=plates[id].head<3>();obs.yaw=plates[id][3];
+      observations.push_back(obs);
+    }
+    handoff.update(observations,t);
+  };
+  select(-40,0,{0,1});
+  check(handoff.primary_id()==0,"most frontal plate initializes aim lock");
+  select(-50,0,{0,1});
+  check(handoff.primary_id()==0,"two eligible plates retain aim lock");
+  select(-65,0,{0,1});
+  check(handoff.primary_id()==1 && handoff.matched_armor.has_value(),
+        "angle exit switches while previous plate still detected");
+  select(35,3,{0,3});
+  check(handoff.primary_id()==3,"positive spin selects incoming plate");
+  select(-35,-3,{0,1});
+  check(handoff.primary_id()==1,"negative spin selects incoming plate");
+  select(25,3,{0});
+  check(handoff.primary_id()==-1 && handoff.state==State::TRACKING,
+        "no aim window candidate does not discard vehicle track");
+  select(-65,0,{});
+  check(handoff.primary_id()==1 && handoff.state==State::TEMP_LOST,
+        "occlusion continues model based aim selection");
+  for(int i=0;i<100 && handoff.target;++i) {
+    t+=std::chrono::milliseconds(33);handoff.update({},t);
+  }
+  check(handoff.state==State::LOST,"occlusion expires at time limit");
   Tracker behind(.2,1.0);
   ObservedArmor stable_armor=a; stable_armor.xyz={3,0,-1}; stable_armor.yaw=M_PI;
   check(behind.init({stable_armor},t) && !behind.target->diverged(),

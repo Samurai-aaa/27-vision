@@ -64,11 +64,13 @@ TrackerNode::TrackerNode(const rclcpp::NodeOptions & options)
   tracker_->high_confidence = declare_parameter<double>("high_confidence", 0.65);
   tracker_->low_confidence = declare_parameter<double>("low_confidence", 0.35);
   tracker_->min_class_margin = declare_parameter<double>("min_class_margin", 1.0);
-  tracker_->primary_switch_frames = declare_parameter<int>("primary_switch_frames", 3);
+  tracker_->aim_coming_angle = declare_parameter<double>("aim_coming_angle_deg", 60.0) * CV_PI / 180.0;
+  tracker_->aim_leaving_angle = declare_parameter<double>("aim_leaving_angle_deg", 20.0) * CV_PI / 180.0;
+  tracker_->aim_spin_speed = declare_parameter<double>("aim_spin_speed", 2.0);
   tracker_->max_weak_frames = declare_parameter<int>("max_weak_frames", 8);
   tracker_->tracking_thres = declare_parameter<int>("tracking_thres", 5);
   // 漏检容忍窗口：连续 N 帧无命中才回 LOST（稀疏检出/多车场景防画面反复断流）
-  tracker_->max_miss_frames = declare_parameter<int>("max_miss_frames", 15);
+  tracker_->max_miss_frames = declare_parameter<int>("max_miss_frames", 120);
   tracker_->lost_time_thres = declare_parameter<double>("lost_time_thres", 1.5);
   tracker_->armor_num_override = armor_num_;
   tracker_->radius_override = radius_init_;

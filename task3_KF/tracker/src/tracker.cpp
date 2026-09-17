@@ -28,7 +28,8 @@ void Tracker::reset()
   miss_count_ = 0;
   weak_count_ = 0;
   primary_id_ = 0;
-  primary_miss_count_ = 0;
+  aim_lock_id_ = -1;
+  observed_other_plate_ = false;
 }
 
 bool Tracker::init(const std::vector<ObservedArmor> & armors, std::chrono::steady_clock::time_point t)
@@ -65,7 +66,8 @@ bool Tracker::init(const std::vector<ObservedArmor> & armors, std::chrono::stead
   target = Target(*closest, t, radius, armor_num, P0_dig);
   matched_armor = *closest;  // 锁定帧即命中该板（node 画贴合框）
   last_obs = *closest;       // 最近命中观测（含朝向，掉帧外推用）
-  primary_miss_count_ = 0;
+  aim_lock_id_ = -1;
+  observed_other_plate_ = false;
   primary_id_ = 0;           // 初始化板被 Target 建为模型板 0（车心由它反推）
 
   state = State::DETECTING;
@@ -137,27 +139,50 @@ void Tracker::update(const std::vector<ObservedArmor> & armors, std::chrono::ste
   // 弱观测不能无限续命；只有同号、高质量命中才能重置窗口。
   weak_count_ = strong_hit ? 0 : weak_count_ + 1;
 
-  // 主命中板选择（matched_armor，node 画绿框+挂文本）：
-  //   只要 primary_id_（上一帧"正在追踪"的模型板）本帧还有观测命中，就继续跟它——
-  //   即使另一块可见板此刻更近也不换（否则换板瞬间绿框会在相邻两板间抖/提前跳）；
-  //   连续 primary_switch_frames 帧无主板观测才移交给其他命中板，
-  //   短暂遮挡时保留主板身份；其他板仍可修正整车。
-  const Hit * nearest = nullptr;   // 退路：当前跟踪板消失后的接管板
-  const Hit * same_id = nullptr;   // 延续：关联到 primary_id_ 的命中板
-  for (const auto & h : hits) {
-    if (nearest == nullptr || h.pd < nearest->pd) nearest = &h;
-    if (h.mid == primary_id_ && (same_id == nullptr || h.pd < same_id->pd)) same_id = &h;
+  // sp_vision Aimer::choose_aim_point：选板独立于是否检测到主板。
+  // 未观测过其他模型板时只选择初始化板；此信息跨帧保持。
+  for (const auto & h : hits) observed_other_plate_ |= h.mid != 0;
+  primary_id_ = -1;
+  const auto aim_plates = target->armor_xyza_list();
+  const auto center = target->center();
+  const double front_angle = std::atan2(-center.z(), -center.x());
+  std::vector<double> delta;
+  for (const auto & plate : aim_plates)
+    delta.push_back(limit_rad(plate[3] - front_angle));
+  const double speed = target->ekf_x()[7];
+  if (!observed_other_plate_) {
+    primary_id_ = 0;
+  } else if (std::abs(speed) <= aim_spin_speed && tracked_number != "O") {
+    std::vector<int> ids;
+    for (size_t i = 0; i < delta.size(); ++i)
+      if (std::abs(delta[i]) <= M_PI / 3.0) ids.push_back(static_cast<int>(i));
+    if (ids.size() > 1) {
+      if (std::find(ids.begin(), ids.end(), aim_lock_id_) == ids.end())
+        aim_lock_id_ = *std::min_element(ids.begin(), ids.end(), [&](int a, int b) {
+          return std::abs(delta[a]) < std::abs(delta[b]);
+        });
+      primary_id_ = aim_lock_id_;
+    } else {
+      aim_lock_id_ = -1;
+      if (!ids.empty()) primary_id_ = ids.front();
+    }
+  } else {
+    const double coming = tracked_number == "O" ? 70.0 * M_PI / 180.0 : aim_coming_angle;
+    const double leaving = tracked_number == "O" ? 30.0 * M_PI / 180.0 : aim_leaving_angle;
+    for (size_t i = 0; i < delta.size(); ++i) {
+      if (std::abs(delta[i]) > coming) continue;
+      if ((speed > 0 && delta[i] < leaving) ||
+          (speed < 0 && delta[i] > -leaving)) {
+        primary_id_ = static_cast<int>(i);
+        break;
+      }
+    }
   }
-  primary_miss_count_ = same_id ? 0 : primary_miss_count_ + 1;
-  const Hit * chosen = same_id ? same_id :
-    (primary_miss_count_ >= primary_switch_frames ? nearest : nullptr);
-  if (chosen != nullptr) {
-    if (same_id == nullptr) {
-      primary_id_ = chosen->mid;
-      primary_miss_count_ = 0;
-    }  // 旧板转走，移交新可见板
-    matched_armor = *chosen->obs;  // node 据此画"贴合实测框"（绿实线）
-    last_obs = *chosen->obs;       // 刷新"最近朝向"（掉帧外推保持目标真实朝向）
+  for (const auto & h : hits) {
+    if (h.mid != primary_id_) continue;
+    matched_armor = *h.obs;
+    last_obs = *h.obs;
+    break;
   }
 
   // 状态机转移（rm 同款 + 漏检容忍窗口）

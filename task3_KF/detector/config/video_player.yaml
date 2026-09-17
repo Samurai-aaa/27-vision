@@ -4,7 +4,7 @@ video_player:
   ros__parameters:
     # 视频路径：换机器 / 换视频只改这一处即可（支持 ~ 展开，节点会自动换成 $HOME）。
     # 视频约定在工作区外一层 video_input/；本机示例，其它机器改路径后无需再动 launch。
-    video_path: ~/Workspaces/27-vision-dev/video_input/dark_move.avi
+    video_path: ~/Workspaces/27-vision-dev/video_input/red.avi
 
     fps: 30.0              # 播放/录制速率；当前录制脚本固定 30fps，非原生视频时间
     loop: false            # 播完一遍节点自动退出：一键录制把源视频完整一遍录下来自然收尾。
