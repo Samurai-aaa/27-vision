@@ -7,7 +7,7 @@ detector:
     # 敌方颜色：0=打红车（配 red 视频）1=打蓝车（配 blue 视频）。
     #   设反的后果不是"检测精度下降"，而是 OpenvinoInfer 会把该颜色的板**整块丢掉**：
     #   /armors 照常发布但不含装甲板 → tracker 一直 LOST，无法产生跟踪框。
-    detect_color: 0
+    detect_color: 1
     # 初筛与 NMS 共用低分候选阈值；tracker 用高分建轨、低分有限续轨。
     confidence_threshold: 0.35
     nms_threshold: 0.45

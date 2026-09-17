@@ -61,6 +61,16 @@ TrackerNode::TrackerNode(const rclcpp::NodeOptions & options)
   armor_num_ = declare_parameter<int>("armor_num", 0);       // 0 = 按车牌默认（哨兵/步兵 4 板）
   radius_init_ = declare_parameter<double>("radius_init", 0.0);  // 0 = 按车牌默认
   tracker_ = std::make_unique<Tracker>(max_match_distance_, max_match_yaw_diff_);
+  tracker_->adaptive_q.enabled = declare_parameter<bool>("adaptive_q_enabled", true);
+  tracker_->adaptive_q.nis_threshold = declare_parameter<double>("adaptive_q_nis_threshold", 4.0);
+  tracker_->adaptive_q.max_scale = declare_parameter<double>("adaptive_q_max_scale", 10.0);
+  tracker_->adaptive_q.decay_time = declare_parameter<double>("adaptive_q_decay_time", 0.5);
+  const auto & aq = tracker_->adaptive_q;
+  if (!std::isfinite(aq.nis_threshold) || aq.nis_threshold <= 0.0 ||
+      !std::isfinite(aq.max_scale) || aq.max_scale < 1.0 ||
+      !std::isfinite(aq.decay_time) || aq.decay_time <= 0.0) {
+    throw std::invalid_argument("invalid adaptive_q parameters");
+  }
   tracker_->high_confidence = declare_parameter<double>("high_confidence", 0.65);
   tracker_->low_confidence = declare_parameter<double>("low_confidence", 0.35);
   tracker_->min_class_margin = declare_parameter<double>("min_class_margin", 1.0);
@@ -609,7 +619,9 @@ void TrackerNode::drawHud(cv::Mat & out)
   snprintf(line, sizeof(line), "match=%s  last_id=%d  upd=%d", matched ? "Y" : "N",
            tracker_->target->last_id, tracker_->target->update_count());
   put(line, cv::Scalar(255, 255, 255));
-  snprintf(line, sizeof(line), "frame=%s", frame_id_.c_str());
+  snprintf(line, sizeof(line), "Q=%s x%.2f NIS=%.2f",
+           tracker_->target->adaptive_q.enabled ? "dynamic" : "fixed",
+           tracker_->target->q_scale(), tracker_->target->ekf().last_nis);
   put(line, cv::Scalar(180, 255, 180));
 }
 

@@ -94,6 +94,9 @@ void Target::predict(double dt)
         v1 = 100;  // 加速度方差
         v2 = 400;  // 角加速度方差
     }
+    // 创新驱动的倍率仅作用于 CV 平移和匀角速度运动噪声；几何参数 Q 仍为零。
+    v1 *= q_scale();
+    v2 *= q_scale();
     auto a = dt * dt * dt * dt / 4;
     auto b = dt * dt * dt / 2;
     auto c = dt * dt;
@@ -126,6 +129,9 @@ void Target::predict(double dt)
         ekf_.x[7] = ekf_.x[7] > 0 ? 2.51 : -2.51;
 
     ekf_.predict(F, Q, f);
+    // 按实际 dt 回落，避免多板更新或播放帧率改变衰减速度。
+    q_scale_ = adaptive_q.enabled ?
+      1.0 + (q_scale_ - 1.0) * std::exp(-dt / adaptive_q.decay_time) : 1.0;
 }
 
 int Target::update(const ObservedArmor & armor, int id)
@@ -136,6 +142,13 @@ int Target::update(const ObservedArmor & armor, int id)
     update_ypda(armor, id);
     if (!ekf_.update_accepted) return -1;
     if (diverged()) { ekf_ = prior; return -1; }
+    // 仅已通过 NIS/物理检查的可靠观测触发，拒绝观测和弱续跟不放大 Q。
+    // 同帧多板取最大响应，倍率从下一次预测生效，不重复更新当前观测。
+    if (adaptive_q.enabled && armor.noise_scale <= 1.0 &&
+        !armor.color_uncertain && std::isfinite(ekf_.last_nis)) {
+      q_scale_ = std::max(q_scale_, std::clamp(
+        ekf_.last_nis / adaptive_q.nis_threshold, 1.0, adaptive_q.max_scale));
+    }
     jumped = id != 0;
     is_switch_ = id != last_id;
     if (is_switch_) ++switch_count_;

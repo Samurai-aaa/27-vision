@@ -1,6 +1,11 @@
 # tracker_node 参数（整车 EKF：小陀螺车 4 板 / 前哨 3 板）
 tracker_node:
   ros__parameters:
+    # 动态 Q：可靠观测的 NIS 超过基准时增大下一帧运动噪声，不调整车形参数噪声。
+    adaptive_q_enabled: true  # false = 原固定 Q，便于同素材对比
+    adaptive_q_nis_threshold: 4.0
+    adaptive_q_max_scale: 10.0
+    adaptive_q_decay_time: 0.5 # 秒，倍率回落的时间常数
     # —— 整车数据关联双阈值门控 ——
     high_confidence: 0.65       # 建轨/可靠同号命中
     low_confidence: 0.35        # 弱候选，仅已确认轨迹可用

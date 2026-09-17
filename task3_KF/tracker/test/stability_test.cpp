@@ -27,6 +27,28 @@ int main() {
   check(ekf.update_accepted && std::abs(ekf.last_nis-.5)<1e-9,"prior NIS");
   auto t=std::chrono::steady_clock::time_point{};
   ObservedArmor a; a.number="3"; a.xyz={0,0,3}; a.yaw=-M_PI/2;
+  // 隔离动态 Q 的响应：精确先验、可信位置突变、同一观测对比固定 Q。
+  Target adaptive(a,t,.31,4,Eigen::VectorXd::Zero(11));
+  Target fixed=adaptive;fixed.adaptive_q.enabled=false;
+  auto sudden=a;sudden.xyz.x()=.5;
+  check(adaptive.update(sudden,0)==0 && fixed.update(sudden,0)==0,
+        "credible maneuver observation accepted");
+  check(adaptive.q_scale()>1 && adaptive.q_scale()<=adaptive.adaptive_q.max_scale &&
+        fixed.q_scale()==1,"innovation increases bounded dynamic Q only");
+  const double peak=adaptive.q_scale();
+  adaptive.predict(.033);fixed.predict(.033);
+  check(adaptive.ekf().P(1,1)>fixed.ekf().P(1,1),"dynamic Q increases motion uncertainty");
+  check(adaptive.ekf().P.bottomRightCorner(3,3).norm()==0,
+        "dynamic Q leaves geometry noise unchanged");
+  check(adaptive.q_scale()<peak,"dynamic Q decays with elapsed time");
+  const double before_bad=adaptive.q_scale();
+  auto bad=a;bad.xyz.x()=100;
+  check(adaptive.update(bad,0)==-1 && adaptive.q_scale()==before_bad,
+        "rejected outlier does not boost Q");
+  Target weak_q(a,t,.31,4,Eigen::VectorXd::Zero(11));
+  sudden.noise_scale=4;
+  weak_q.update(sudden,0);
+  check(weak_q.q_scale()==1,"weak observation does not boost Q");
   Tracker tracker(.2,1.); tracker.radius_override=.31;
   check(tracker.init({a},t),"init");
   for(int i=1;i<=60;++i) {

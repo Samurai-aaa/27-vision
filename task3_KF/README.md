@@ -97,6 +97,18 @@ cd ~/Workspaces/27-vision-dev/task3_KF
 
 ### 编译
 
+整车 EKF 默认启用动态 Q。在 `tracker/config/tracker.yaml` 中设置
+`adaptive_q_enabled: false` 可恢复原固定 Q，重启后生效。对同一视频分别运行两次
+`./scripts/start.sh ekf --record`，每次结束后另存输出文件（同名录制会覆盖）。
+追踪画面 HUD 显示 `Q=dynamic/fixed`、当前倍率和最近一次观测 NIS。
+
+动态 Q 使用四维创新 NIS：可靠观测通过更新及物理检查后，取
+`倍率 = clamp(NIS / adaptive_q_nis_threshold, 1, adaptive_q_max_scale)`，
+与当前倍率取较大值，用于下一次预测。默认基准 4、倍率上限 10；倍率超出 1 的部分
+按 `adaptive_q_decay_time`（默认 0.5 秒）指数衰减。仅放大车心加速度和角加速度噪声，
+不放大半径、长短轴差、高度差的过程噪声。弱观测、被拒绝的观测不触发放大。
+数据关联门控保持原样；完全落在门控外的突变不会触发动态 Q，也不补偿相机俯仰/侧倾。
+
 ```bash
 cd ~/Workspaces/27-vision-dev/task3_KF
 source /opt/ros/humble/setup.bash

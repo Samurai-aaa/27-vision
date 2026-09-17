@@ -33,6 +33,14 @@ struct ObservedArmor {
 class Target
 {
 public:
+  struct AdaptiveQOptions {
+    bool enabled = true;
+    double nis_threshold = 4.0;  // 四维创新的基准
+    double max_scale = 10.0;
+    double decay_time = 0.5;     // 秒，回落到基础 Q 的时间常数
+  };
+  AdaptiveQOptions adaptive_q;
+  double q_scale() const { return adaptive_q.enabled ? q_scale_ : 1.0; }
   std::string number;  // "1"~"5" / "outpost"（前哨站特判用）
   bool jumped;         // 本次匹配到的不是主板（id != 0）
   int last_id;    // debug only
@@ -78,6 +86,7 @@ public:
   bool isinit = false;
 
 private:
+  double q_scale_ = 1.0;
   int armor_num_;
   int switch_count_;
   int update_count_;

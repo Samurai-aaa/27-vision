@@ -64,6 +64,7 @@ bool Tracker::init(const std::vector<ObservedArmor> & armors, std::chrono::stead
 
   tracked_number = closest->number;
   target = Target(*closest, t, radius, armor_num, P0_dig);
+  target->adaptive_q = adaptive_q;
   matched_armor = *closest;  // 锁定帧即命中该板（node 画贴合框）
   last_obs = *closest;       // 最近命中观测（含朝向，掉帧外推用）
   aim_lock_id_ = -1;

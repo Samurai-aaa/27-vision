@@ -55,6 +55,7 @@ public:
 
   // node 层可调参数
   double high_confidence = 0.65;
+  Target::AdaptiveQOptions adaptive_q;
   double low_confidence = 0.35;
   double min_class_margin = 1.0;
   int max_weak_frames = 8;
